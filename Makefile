@@ -23,8 +23,12 @@ tools:
 ## Vendor dependencies (the lib, Bitnami, NFS) from Chart.lock. Re-run after
 ## editing the lib: consumers render the vendored copy. Not a prerequisite of
 ## lint/test because it refreshes every configured Helm repo; CI runs it first.
+## Helm only resolves Chart.yaml repository URLs that are registered locally.
 deps:
-	@for c in $(RENDERABLE); do helm dependency build "$$c"; done
+	@helm repo add bitnami https://charts.bitnami.com/bitnami --force-update
+	@helm repo add nfs-ganesha-server-and-external-provisioner \
+		https://kubernetes-sigs.github.io/nfs-ganesha-server-and-external-provisioner/ --force-update
+	@for c in $(RENDERABLE); do helm dependency build "$$c" || exit 1; done
 
 ## Bare lint, then schema-aware lint per ci fixture. Run `make deps` first.
 lint:
