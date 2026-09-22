@@ -1,0 +1,5 @@
+apiVersion: v2
+name: polytomic-base
+description: Shared templates for Polytomic application charts
+type: library
+version: 1.0.0

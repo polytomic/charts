@@ -1,0 +1,808 @@
+# Polytomic Helm chart values. Secret material never goes here: see the
+# `secrets` block and docs/secrets-aws.md / docs/secrets-gcp.md.
+
+image:
+  # One registry for every Polytomic image in this chart. Point it at a private
+  # mirror to relocate the app, MCP, Vector and Datadog images in one line.
+  registry: 568237466542.dkr.ecr.us-west-2.amazonaws.com
+  name: polytomic-onprem # @schema required:true;minLength:1
+  # Always pin a release tag, e.g. rel2026.09.18. See https://docs.polytomic.com/changelog
+  tag: "" # @schema required:true;minLength:1
+  pullPolicy: IfNotPresent
+
+# Pull secrets for the chart's own pods. The first entry is also handed to the
+# per-task Jobs the runner spawns unless runner.imagePullSecret overrides it.
+imagePullSecrets: []
+
+# Override the chart name in app.kubernetes.io/name labels.
+nameOverride: ""
+
+# Override the resource name prefix. Without this, resources are named
+# <release>-<chart>-<role>; with this, they are named <override>-<role>.
+fullnameOverride: ""
+
+revisionHistoryLimit: 10
+
+# Identifier sent to the license service as DEPLOYMENT; provided by Polytomic.
+polytomicDeploymentId: "" # @schema required:true;minLength:1
+
+auth:
+  # Public URL of this install, e.g. https://polytomic.example.com. Used for
+  # OAuth redirects and advertised to MCP clients as the authorization server.
+  url: "" # @schema required:true;pattern:^https?://.+
+
+# External PostgreSQL. Required when postgresql.enabled is false. The password
+# is supplied as DATABASE_PASSWORD through a secret source.
+database:
+  host: ""
+  port: "5432"
+  username: "polytomic"
+  polytomicDatabase: "polytomic"
+  sslmode: "require"
+
+# External Redis. Required when redis.enabled is false. With auth=true the
+# chart emits REDIS_URL with ${REDIS_PASSWORD}, supplied through a secret
+# source. tls=true emits rediss://.
+externalRedis:
+  host: ""
+  port: "6379"
+  tls: false
+  auth: false
+
+# Bundled Redis (Bitnami subchart). For trial installs; production uses
+# externalRedis.* with redis.enabled=false.
+redis:
+  enabled: false
+  fullnameOverride: polytomic-redis
+  architecture: standalone
+  auth:
+    enabled: true
+    # Name of a Secret holding REDIS_PASSWORD. Must also appear in
+    # secrets.existing or secrets.external.entries.
+    existingSecret: ""
+    existingSecretPasswordKey: REDIS_PASSWORD
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# Bundled PostgreSQL (Bitnami subchart). For trial installs; production uses
+# database.* with postgresql.enabled=false.
+postgresql:
+  enabled: false
+  fullnameOverride: polytomic-postgresql
+  auth:
+    username: polytomic
+    database: polytomic
+    # Name of a Secret holding DATABASE_PASSWORD. Must also appear in
+    # secrets.existing or secrets.external.entries. The same key serves as
+    # the postgres superuser password.
+    existingSecret: ""
+    secretKeys:
+      adminPasswordKey: DATABASE_PASSWORD
+      userPasswordKey: DATABASE_PASSWORD
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# Bundled NFS provisioner for sharedVolume.mode=dynamic on clusters without a
+# ReadWriteMany StorageClass. Provides the "nfs" StorageClass.
+nfs-server-provisioner:
+  enabled: false
+  persistence:
+    enabled: true
+  storageClass:
+    create: true
+    defaultClass: false
+    name: nfs
+    allowVolumeExpansion: true
+
+# Bucket for record logs, execution logs and query exports. Access comes from
+# the environment (IRSA / Workload Identity via serviceAccount.annotations)
+# or from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in a secret source; never
+# from values.
+operationalBucket:
+  provider: s3 # @schema enum:[s3, gcs]
+  name: "" # @schema required:true;minLength:1
+  # Required for s3; unused for gcs.
+  region: ""
+
+# Shared ReadWriteMany volume mounted on every app pod, CronJob and spawned Job.
+sharedVolume:
+  # static: pre-existing volume via CSI. dynamic: PVC against a StorageClass.
+  # emptyDir: no shared storage; local data caching is off.
+  mode: dynamic # @schema enum:[static, dynamic, emptyDir]
+  size: 20Gi
+  mountPath: /var/polytomic
+  subPath: ""
+  accessModes:
+    - ReadWriteMany
+
+  static:
+    driver: efs.csi.aws.com
+    volumeHandle: ""
+    volumeAttributes: {}
+
+  dynamic:
+    # Empty uses the cluster default StorageClass.
+    storageClassName: ""
+
+  persistentVolume:
+    name: polytomic-data
+    reclaimPolicy: Retain
+
+  persistentVolumeClaim:
+    name: polytomic-data
+
+# Flat map of non-secret environment variables merged into the app ConfigMap
+# and propagated to spawned per-task Jobs. See docs/config-keys.md for the
+# supported keys. Keys the chart computes are reserved and rejected here.
+config: {}
+
+# Secret material. The chart never renders a Secret. Use one or both sources;
+# both are attached to every pod with envFrom.
+secrets:
+  # ESO-rendered: the chart emits an ExternalSecret per entry and the External
+  # Secrets Operator writes the Secret. Requires ESO in the cluster.
+  external:
+    # API version of the ExternalSecret CRD your ESO serves.
+    apiVersion: external-secrets.io/v1
+    defaults:
+      refreshInterval: 1h
+      asm:
+        storeName: aws-secrets-manager
+        storeKind: ClusterSecretStore
+      gcpsm:
+        storeName: gcp-secret-manager
+        storeKind: ClusterSecretStore
+    entries: [] # @schema item:object
+    # - name: polytomic-secrets
+    #   source:
+    #     type: asm            # asm | gcpsm
+    #     path: prod/polytomic
+    #   data:
+    #     - DEPLOYMENT_KEY     # shorthand: k8sKey == remoteKey
+    #     - DATABASE_PASSWORD
+    #     - k8sKey: GOOGLE_CLIENT_SECRET
+    #       remoteKey: google_client_secret
+
+  # Secrets that already exist in the release namespace.
+  existing: [] # @schema item:object
+  # - name: polytomic-secrets
+
+services:
+  # Settings applied to every service unless overridden per-service.
+  # nodeSelector / affinity / tolerations replace; podAnnotations / podLabels
+  # are additive; initContainers / volumes / volumeMounts concat (defaults
+  # first) and render through tpl with the lib context (.root is the Helm root).
+  # The shared volume (sharedVolume.*) is prepended to volumes / volumeMounts
+  # by the chart; list only extras here.
+  defaults:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podLabels: {}
+    initContainers: []
+    volumes: []
+    volumeMounts: []
+
+  # Web/API serving. The user-facing HTTP layer; receives ingress traffic.
+  app:
+    enabled: true
+    replicas: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    env:
+      ROLE: "web"
+      PORT: "5100"
+      STATIC_ROOT: "/root/static"
+    service:
+      type: ClusterIP
+      port: 5100
+      targetPort: 5100
+      nodePort: ""
+      annotations: {}
+      externalTrafficPolicy: ""
+    healthCheck:
+      enabled: true
+      path: "/status.txt"
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+      behavior: {}
+    metrics:
+      enabled: false
+      path: "/metrics"
+      port: 8080
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: "" # @schema type:[string, integer]
+      maxUnavailable: "" # @schema type:[string, integer]
+    podAnnotations: {}
+    podLabels: {}
+    sidecarContainers: []
+
+  # Sync orchestration; decides when individual syncs run.
+  scheduler:
+    enabled: true
+    replicas: 1
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    env:
+      ROLE: "scheduler"
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: "" # @schema type:[string, integer]
+      maxUnavailable: "" # @schema type:[string, integer]
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+  # Background health monitor for connections, syncs, and integrations.
+  healthcheck:
+    enabled: true
+    replicas: 1
+    resources:
+      limits:
+        cpu: 100m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    env:
+      ROLE: "healthcheck"
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+  # Schema discovery / cached schema metadata for connected sources.
+  schemacache:
+    enabled: true
+    replicas: 1
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    env:
+      ROLE: "schemacache"
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+  # Sync executor; runs per-sync work and spawns per-task K8s Jobs.
+  sync:
+    enabled: true
+    replicas: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    env:
+      ROLE: "sync"
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+      behavior: {}
+    metrics:
+      enabled: false
+      path: "/metrics"
+      port: 8080
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: "" # @schema type:[string, integer]
+      maxUnavailable: "" # @schema type:[string, integer]
+    podAnnotations: {}
+    podLabels: {}
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+  # Job runner; processes async/long-running jobs queued by the app.
+  jobworker:
+    enabled: true
+    replicas: 1
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    env:
+      ROLE: "jobworker"
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+      behavior: {}
+    metrics:
+      enabled: false
+      path: "/metrics"
+      port: 8080
+    podAnnotations: {}
+    podLabels: {}
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+  # Generic background worker pool.
+  worker:
+    enabled: true
+    replicas: 2
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    env:
+      ROLE: "worker"
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 100
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+      behavior: {}
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: "" # @schema type:[string, integer]
+      maxUnavailable: "" # @schema type:[string, integer]
+    volumes:
+      - name: podinfo
+        downwardAPI:
+          defaultMode: 420
+          items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.annotations
+              path: annotations
+    volumeMounts:
+      - name: podinfo
+        mountPath: /etc/podinfo
+    sidecarContainers: []
+
+# Configuration for the per-task Kubernetes Jobs the runner spawns, NOT the
+# chart's own long-running pods (those are configured under services.*).
+runner:
+  # Pull secret for spawned Jobs. Empty falls back to imagePullSecrets[0];
+  # with neither set, no pull secret is passed.
+  imagePullSecret: ""
+
+  # nodeSelectors is a flat map rendered to KUBERNETES_NODE_SELECTORS.
+  # tolerations is a list rendered to KUBERNETES_TOLERATIONS; omit value for
+  # an Exists toleration.
+  nodeSelectors: {}
+  tolerations: [] # @schema item:object
+  #  - key: dedicated
+  #    value: sync-jobs
+  #    effect: NoSchedule
+  #  - key: gpu          # no value => Operator=Exists
+  #    effect: NoSchedule
+
+  # Per-role sizing for spawned pods. Roles other than task inherit task's
+  # values at runtime for any field left empty. cpu = milliCPU;
+  # memory*/ephemeralStorage* = MiB; *PoolSize = connections;
+  # cleanupDelaySeconds = seconds; tags = "k=v,k=v". Zero/empty is omitted.
+  executors:
+    task:
+      cpu: 1000
+      memoryReservation: 2048
+      memoryMaximum: 8192
+      memoryMega: 8192
+      ephemeralStorageRequest: 0
+      ephemeralStorageMaximum: 0
+      databasePoolSize: 0
+      redisPoolSize: 0
+      cleanupDelaySeconds: 10
+      tags: ""
+    bulk: {}
+    ingest: {}
+    proxy: {}
+    scheduler: {}
+
+serviceAccount:
+  create: true
+  automount: true
+  # e.g. eks.amazonaws.com/role-arn or iam.gke.io/gcp-service-account for
+  # bucket access.
+  annotations: {}
+  name: ""
+
+podSecurityContext:
+  fsGroup: 2000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
+  runAsUser: 0
+
+healthProbes:
+  readinessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startupProbe:
+    enabled: false
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: polytomic.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: app
+  tls: []
+  # - secretName: polytomic-tls
+  #   hosts:
+  #     - polytomic.example.com
+
+# NetworkPolicy for the app pods. Egress to the bundled Postgres and Redis is
+# added automatically; everything else the install reaches (external
+# databases, SaaS APIs, source and destination systems on whatever port they
+# use) goes in `egress`. See docs/network-policy.md.
+networkPolicy:
+  enabled: false
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: ingress-nginx
+  # CIDRs for ingress from non-pod sources (ALB/NLB subnets).
+  ingressCidrs: []
+  # Each entry rendered verbatim as a NetworkPolicy egress rule.
+  egress: []
+  # - to:
+  #     - ipBlock:
+  #         cidr: 0.0.0.0/0
+
+cronjobs:
+  defaults:
+    resources:
+      limits:
+        cpu: "256m"
+        memory: "512Mi"
+      requests:
+        cpu: "128m"
+        memory: "256Mi"
+  jobs:
+    weeklySummary:
+      enabled: false
+      schedule: "0 15 * * MON"
+      command:
+        ["./vector", "&", "./ptctl", "sync", "summary", "-w", "--report-errors"]
+      service: "app"
+    dailySummary:
+      enabled: false
+      schedule: "0 15 * * *"
+      command:
+        ["./vector", "&", "./ptctl", "sync", "summary", "-d", "--report-errors"]
+      service: "app"
+
+# MCP server. A separate image with its own ConfigMap, secret sources and
+# ServiceAccount (no RBAC); it never receives the app's config or secrets.
+mcp:
+  enabled: false
+
+  image:
+    # Empty registry / tag inherit from image.*
+    registry: ""
+    name: polytomic-mcp
+    tag: ""
+
+  polytomic:
+    # Polytomic API the MCP server proxies. Empty resolves to the in-cluster
+    # app Service. Set it to reach the API some other way.
+    baseUrl: ""
+    # Polytomic API version header value.
+    apiVersion: "2025-09-18" # @schema minLength:1
+    # OAuth authorization server advertised to MCP clients. Empty resolves to
+    # auth.url, which browsers can reach; the in-cluster base URL cannot.
+    authServerUrl: "" # @schema pattern:^$|^https?://.+
+    # Public origin this server is reachable at, e.g. https://mcp.example.com.
+    publicOrigin: "" # @schema pattern:^$|^https?://[^/?#]+$
+
+  # Flat map of non-secret env vars for the MCP ConfigMap
+  # (ENABLE_FEEDBACK_TOOL, POLYTOMIC_CODE_RUNTIME, POLYTOMIC_MAX_*, ...).
+  config: {}
+
+  # Secret sources for the MCP pod only (POLYTOMIC_APPROVAL_SECRET,
+  # MODEM_PUBLIC_KEY). Both optional. Same shape as the top-level secrets block.
+  secrets:
+    external:
+      apiVersion: external-secrets.io/v1
+      defaults:
+        refreshInterval: 1h
+        asm:
+          storeName: aws-secrets-manager
+          storeKind: ClusterSecretStore
+        gcpsm:
+          storeName: gcp-secret-manager
+          storeKind: ClusterSecretStore
+      entries: [] # @schema item:object
+    existing: [] # @schema item:object
+
+  serviceAccount:
+    create: true
+    automount: false
+    annotations: {}
+    name: ""
+
+  podSecurityContext:
+    fsGroup: 2000
+
+  # The QuickJS sandbox launcher spawns processes and writes temp files, so
+  # the root filesystem stays writable.
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+    runAsNonRoot: false
+    runAsUser: 0
+
+  healthProbes:
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    livenessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    startupProbe:
+      enabled: false
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 30
+
+  services:
+    defaults:
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      podAnnotations: {}
+      podLabels: {}
+      initContainers: []
+      volumes: []
+      volumeMounts: []
+
+    # MCP sessions live in memory keyed by Mcp-Session-Id, so a client must
+    # reach the same pod for its whole session. Raising replicas or enabling
+    # autoscaling needs sticky routing on the ingress first.
+    http:
+      enabled: true
+      replicas: 1
+      resources:
+        limits:
+          cpu: 250m
+          memory: 512Mi
+        requests:
+          cpu: 128m
+          memory: 256Mi
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+      terminationGracePeriodSeconds: 30
+      env: {}
+      extraEnv: []
+      extraEnvFrom: []
+      podAnnotations: {}
+      podLabels: {}
+      volumes: []
+      volumeMounts: []
+      service:
+        type: ClusterIP
+        port: 3000
+        targetPort: 3000
+        nodePort: ""
+        annotations: {}
+        externalTrafficPolicy: ""
+      healthCheck:
+        enabled: true
+        path: "/healthz"
+      autoscaling:
+        enabled: false
+        minReplicas: 1
+        maxReplicas: 10
+        targetCPUUtilizationPercentage: 80
+        targetMemoryUtilizationPercentage: 80
+        behavior: {}
+      podDisruptionBudget:
+        enabled: false
+        minAvailable: "" # @schema type:[string, integer]
+        maxUnavailable: "" # @schema type:[string, integer]
+
+  networkPolicy:
+    enabled: false
+    ingressNamespaceSelector:
+      kubernetes.io/metadata.name: ingress-nginx
+    ingressCidrs: []
+    # Egress to the Polytomic API when it is off-cluster; same-namespace
+    # traffic (the in-cluster app Service) is always allowed.
+    egress: []
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: mcp.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# Vector DaemonSet: tails pod stdout on every node and routes record logs,
+# execution logs and audit logs into operationalBucket. Off by default; when
+# on, the chart labels the app and MCP pods vector.dev/include=true and sets
+# EXECUTION_LOGS_V2 / VECTOR_DAEMONSET.
+vector:
+  # Forward non-record logs to Polytomic's Datadog as well. Sets SEND_LOGS.
+  managedLogs: false
+
+  daemonset:
+    enabled: false
+    image:
+      # Empty registry / tag inherit from image.*
+      registry: ""
+      name: polytomic-vector
+      tag: ""
+    imagePullPolicy: IfNotPresent
+    podLabelSelector: "vector.dev/include=true"
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+    tolerations: []
+    nodeSelector: {}
+    affinity: {}
+    # hostPath persists checkpoints across pod reschedules. GKE Autopilot
+    # blocks write-mode hostPath; use emptyDir there.
+    dataDir:
+      type: hostPath # @schema enum:[hostPath, emptyDir]
+    serviceAccount:
+      create: true
+      name: ""
+      # e.g. eks.amazonaws.com/role-arn for bucket access.
+      annotations: {}
+    # Existing Secrets for the Vector pods: static bucket credentials
+    # (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) if not using workload
+    # identity, and DEPLOYMENT_KEY when managedLogs is on. Never the app's
+    # secrets.
+    secrets:
+      existing: []
+
+# In-pod Vector process for deployments without the DaemonSet. Sets
+# INTERNAL_EXECUTION_LOGS / EXECUTION_LOGS_V2.
+embeddedVector:
+  enabled: false
+
+# Datadog agent DaemonSet for APM and container metrics. Off by default; when
+# on, app pods get DD_AGENT_HOST pointing at the node-local agent Service.
+datadog:
+  daemonset:
+    enabled: false
+    image:
+      # Empty registry / tag inherit from image.*
+      registry: ""
+      name: polytomic-dd-agent
+      tag: ""
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "200m"
+      limits:
+        memory: "768Mi"
+        cpu: "500m"
+    containerMetrics:
+      enabled: true
+    processAgent:
+      enabled: true
+    # Container filters; empty defaults to kube_namespace:<release namespace>.
+    includeContainers: ""
+    excludeContainers: ""
+    tolerations: []
+    nodeSelector: {}
+    affinity: {}
+    # Existing Secrets for the agent pods. Must supply DEPLOYMENT_KEY so ptctl
+    # can decrypt the Datadog API key. Never the app's secrets.
+    secrets:
+      existing: []

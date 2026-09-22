@@ -1,0 +1,256 @@
+suite: services
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/hpa.yaml
+  - templates/poddisruptionbudget.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: ut-secrets
+
+tests:
+  - it: renders all seven roles
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  - it: mounts the shared volume on every role, ahead of per-service volumes
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: polytomic-data
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /var/polytomic
+        documentIndex: 0
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts[0].subPath
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 1
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 2
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 3
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+        documentIndex: 6
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /var/polytomic
+        documentIndex: 6
+
+  - it: applies subPath and a custom mount path to the shared mount
+    set:
+      <<: *valid
+      sharedVolume.mountPath: /data
+      sharedVolume.subPath: tenant-a
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /data
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].subPath
+          value: tenant-a
+
+  - it: uses an emptyDir when sharedVolume.mode is emptyDir
+    set:
+      <<: *valid
+      sharedVolume.mode: emptyDir
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+      - notExists:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim
+
+  - it: keeps the podinfo volume on the sync role after the shared volume
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: sync
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[1].name
+          value: podinfo
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1].mountPath
+          value: /etc/podinfo
+
+  - it: sets ROLE per service and no PROFILING by default
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: jobworker
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROLE
+            value: jobworker
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROFILING
+            value: "true"
+
+  - it: ships on-prem 1.x replicas and resources
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: worker
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1Gi
+
+  - it: app and sync autoscale by default with a floor of 2; jobworker does not
+    set: *valid
+    template: templates/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.minReplicas
+          value: 2
+
+  - it: app deployment omits replicas while autoscaling
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: app
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: app deployment attaches the ConfigMap and every secret source
+    set:
+      <<: *valid
+      secrets.external.entries:
+        - name: eso-primary
+          source: { type: asm, path: ut/polytomic }
+          data: [DATABASE_PASSWORD]
+      secrets.existing:
+        - name: ut-secrets
+        - name: vendor-creds
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: app
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: RELEASE-NAME-polytomic-config
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: eso-primary
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: vendor-creds
+
+  - it: only the app role gets a Service, on port 5100
+    release:
+      name: rel
+    set: *valid
+    template: templates/service.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-app
+      - equal:
+          path: spec.ports[0].port
+          value: 5100
+
+  - it: PDBs are off by default and render per service when enabled
+    set:
+      <<: *valid
+      services.app.podDisruptionBudget.enabled: true
+      services.app.podDisruptionBudget.minAvailable: 1
+    template: templates/poddisruptionbudget.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: app
+
+  - it: a disabled role renders nothing
+    set:
+      <<: *valid
+      services.healthcheck.enabled: false
+    template: templates/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 6
+
+  - it: defaults initContainers are empty and a wait-for-ping style entry renders through tpl
+    set:
+      <<: *valid
+      services.defaults.initContainers:
+        - name: wait-for-ping
+          image: busybox:1.36
+          env:
+            - name: TELEMETRY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: '{{ include "polytomic-base.configmapName" . }}'
+                  key: TELEMETRY_URL
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: scheduler
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].env[0].valueFrom.configMapKeyRef.name
+          value: RELEASE-NAME-polytomic-config

@@ -1,0 +1,24 @@
+apiVersion: v2
+name: polytomic
+description: Polytomic data integration platform Helm chart for Kubernetes
+type: application
+version: 2.0.0
+appVersion: "latest"
+icon: https://www.polytomic.com/favicon.ico
+kubeVersion: ">=1.34.0-0"
+dependencies:
+  - name: polytomic-base
+    version: 1.0.0
+    repository: "file://../polytomic-base"
+  - name: postgresql
+    version: "18.2.3"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "24.1.2"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+  - name: nfs-server-provisioner
+    version: "1.6.0"
+    repository: "https://kubernetes-sigs.github.io/nfs-ganesha-server-and-external-provisioner/"
+    condition: nfs-server-provisioner.enabled

@@ -1,0 +1,486 @@
+suite: computed config
+# Every env var polytomic.extraConfigData emits into the app ConfigMap.
+templates:
+  - templates/configmap.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  image.registry: ""
+  image.name: "polytomic"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  database.username: "polytomic_owner"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: "ut-primary"
+
+tests:
+  - it: emits the static keys
+    set: *valid
+    asserts:
+      - equal:
+          path: data.KUBERNETES
+          value: "true"
+      - equal:
+          path: data.LOCAL_DATA
+          value: "true"
+      - equal:
+          path: data.LOCAL_DATA_PATH
+          value: /var/polytomic
+      - equal:
+          path: data.KUBERNETES_MOUNT_PATH
+          value: /var/polytomic
+      - equal:
+          path: data.KUBERNETES_VOLUME
+          value: polytomic-data
+
+  - it: emits computed names
+    release:
+      name: rel
+      namespace: my-ns
+    set: *valid
+    asserts:
+      - equal:
+          path: data.KUBERNETES_NAMESPACE
+          value: my-ns
+      - equal:
+          path: data.KUBERNETES_CONFIGMAP
+          value: rel-polytomic-config
+      - equal:
+          path: data.KUBERNETES_SERVICE_ACCOUNT
+          value: rel-polytomic
+      - equal:
+          path: data.KUBERNETES_SECRET
+          value: ut-primary
+
+  - it: emits identity and URLs
+    set: *valid
+    asserts:
+      - equal:
+          path: data.DEPLOYMENT
+          value: ut-deployment
+      - equal:
+          path: data.POLYTOMIC_URL
+          value: https://polytomic.test
+      - equal:
+          path: data.APP_URL
+          value: https://polytomic.test
+      - notExists:
+          path: data.TELEMETRY_URL
+
+  - it: KUBERNETES_IMAGE renders registry/name:tag
+    set:
+      <<: *valid
+      image.registry: "ecr.aws/polytomic"
+      image.tag: "v1.2.3"
+    asserts:
+      - equal:
+          path: data.KUBERNETES_IMAGE
+          value: ecr.aws/polytomic/polytomic:v1.2.3
+
+  # --- Database and Redis URLs
+  - it: DATABASE_URL uses external settings with a password placeholder
+    set: *valid
+    asserts:
+      - equal:
+          path: data.DATABASE_URL
+          value: "postgres://polytomic_owner:${DATABASE_PASSWORD}@postgres.example.com:5432/polytomic?sslmode=require"
+
+  - it: DATABASE_URL honors sslmode
+    set:
+      <<: *valid
+      database.sslmode: disable
+    asserts:
+      - equal:
+          path: data.DATABASE_URL
+          value: "postgres://polytomic_owner:${DATABASE_PASSWORD}@postgres.example.com:5432/polytomic?sslmode=disable"
+
+  - it: REDIS_URL omits credentials without auth
+    set: *valid
+    asserts:
+      - equal:
+          path: data.REDIS_URL
+          value: "redis://redis.example.com:6379"
+      - equal:
+          path: data.CACHE_URL
+          value: "redis://redis.example.com:6379"
+
+  - it: REDIS_URL combines tls and auth
+    set:
+      <<: *valid
+      externalRedis.tls: true
+      externalRedis.auth: true
+    asserts:
+      - equal:
+          path: data.REDIS_URL
+          value: "rediss://:${REDIS_PASSWORD}@redis.example.com:6379"
+
+  # --- Operational bucket
+  - it: emits s3 bucket vars and AWS_REGION
+    set: *valid
+    asserts:
+      - equal:
+          path: data.DEFAULT_OPERATIONAL_BUCKET
+          value: "s3://ut-bucket?region=us-west-2"
+      - equal:
+          path: data.RECORD_LOG_BUCKET
+          value: ut-bucket
+      - equal:
+          path: data.EXECUTION_LOG_BUCKET
+          value: ut-bucket
+      - equal:
+          path: data.RECORD_LOG_REGION
+          value: us-west-2
+      - equal:
+          path: data.EXECUTION_LOG_REGION
+          value: us-west-2
+      - equal:
+          path: data.AWS_REGION
+          value: us-west-2
+      - notExists:
+          path: data.POLYTOMIC_USE_GCS
+
+  - it: emits gcs bucket vars and no AWS_REGION
+    set:
+      <<: *valid
+      operationalBucket.provider: gcs
+      operationalBucket.region: ""
+    asserts:
+      - equal:
+          path: data.DEFAULT_OPERATIONAL_BUCKET
+          value: "gs://ut-bucket"
+      - equal:
+          path: data.RECORD_LOG_REGION
+          value: gcs
+      - equal:
+          path: data.POLYTOMIC_USE_GCS
+          value: "true"
+      - notExists:
+          path: data.AWS_REGION
+
+  - it: requires a region for s3
+    set:
+      <<: *valid
+      operationalBucket.region: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: operationalBucket.region is required
+
+  - it: strips a scheme prefix from the bucket name
+    set:
+      <<: *valid
+      operationalBucket.name: "s3://ut-bucket"
+    asserts:
+      - equal:
+          path: data.RECORD_LOG_BUCKET
+          value: ut-bucket
+
+  - it: rejects an unknown bucket provider
+    set:
+      <<: *valid
+      operationalBucket.provider: azure
+    asserts:
+      - failedTemplate:
+          errorPattern: operationalBucket.provider
+
+  # --- Runner pull secret
+  - it: omits KUBERNETES_IMAGE_PULL_SECRET when nothing names one
+    set: *valid
+    asserts:
+      - notExists:
+          path: data.KUBERNETES_IMAGE_PULL_SECRET
+
+  - it: derives KUBERNETES_IMAGE_PULL_SECRET from imagePullSecrets[0]
+    set:
+      <<: *valid
+      imagePullSecrets:
+        - name: regcred
+        - name: other
+    asserts:
+      - equal:
+          path: data.KUBERNETES_IMAGE_PULL_SECRET
+          value: regcred
+
+  - it: runner.imagePullSecret overrides imagePullSecrets
+    set:
+      <<: *valid
+      imagePullSecrets:
+        - name: regcred
+      runner.imagePullSecret: jobcred
+    asserts:
+      - equal:
+          path: data.KUBERNETES_IMAGE_PULL_SECRET
+          value: jobcred
+
+  # --- Secret precedence
+  - it: KUBERNETES_SECRET prefers the first external entry
+    set:
+      <<: *valid
+      secrets.external.entries:
+        - name: eso-primary
+          source: { type: asm, path: ut/polytomic }
+          data: [DATABASE_PASSWORD]
+    asserts:
+      - equal:
+          path: data.KUBERNETES_SECRET
+          value: eso-primary
+      - equal:
+          path: data.KUBERNETES_EXTRA_SECRETS
+          value: ut-primary
+
+  - it: KUBERNETES_EXTRA_SECRETS joins the non-primary sources
+    set:
+      <<: *valid
+      secrets.external.entries:
+        - name: primary
+          source: { type: asm, path: ut/polytomic }
+          data: [DATABASE_PASSWORD]
+        - name: keys
+          source: { type: asm, path: ut/keys }
+          data: [DEPLOYMENT_KEY]
+      secrets.existing:
+        - name: vendor-creds
+    asserts:
+      - equal:
+          path: data.KUBERNETES_EXTRA_SECRETS
+          value: keys,vendor-creds
+
+  - it: KUBERNETES_EXTRA_SECRETS is absent with one source
+    set: *valid
+    asserts:
+      - notExists:
+          path: data.KUBERNETES_EXTRA_SECRETS
+
+  - it: fails without a secret source
+    set:
+      <<: *valid
+      secrets.existing: []
+    asserts:
+      - failedTemplate:
+          errorPattern: no primary secret
+
+  # --- config passthrough
+  - it: passes arbitrary config keys through, including TELEMETRY_URL
+    set:
+      <<: *valid
+      config.MY_FLAG: "enabled"
+      config.TELEMETRY_URL: "http://ping.ping.svc:5200"
+    asserts:
+      - equal:
+          path: data.MY_FLAG
+          value: "enabled"
+      - equal:
+          path: data.TELEMETRY_URL
+          value: "http://ping.ping.svc:5200"
+
+  - it: rejects chart-computed keys in config
+    set:
+      <<: *valid
+      config.RECORD_LOG_BUCKET: "x"
+    asserts:
+      - failedTemplate:
+          errorPattern: config.RECORD_LOG_BUCKET is a reserved key
+
+  # --- runner scheduling and sizing
+  - it: ships task executor defaults and nothing for other roles
+    set: *valid
+    asserts:
+      - equal:
+          path: data.TASK_EXECUTOR_CPU
+          value: "1000"
+      - equal:
+          path: data.TASK_EXECUTOR_MEMORY_RESERVATION
+          value: "2048"
+      - equal:
+          path: data.TASK_EXECUTOR_MEMORY_MAXIMUM
+          value: "8192"
+      - equal:
+          path: data.TASK_EXECUTOR_MEMORY_MEGA
+          value: "8192"
+      - equal:
+          path: data.TASK_EXECUTOR_CLEANUP_DELAY_SECONDS
+          value: "10"
+      - notExists:
+          path: data.TASK_EXECUTOR_EPHEMERAL_STORAGE_REQUEST
+      - notExists:
+          path: data.BULK_EXECUTOR_CPU
+      - notExists:
+          path: data.KUBERNETES_NODE_SELECTORS
+      - notExists:
+          path: data.KUBERNETES_TOLERATIONS
+
+  - it: zeroed task fields are omitted so app defaults apply
+    set:
+      <<: *valid
+      runner.executors.task.cpu: 0
+      runner.executors.task.memoryMega: 0
+    asserts:
+      - notExists:
+          path: data.TASK_EXECUTOR_CPU
+      - notExists:
+          path: data.TASK_EXECUTOR_MEMORY_MEGA
+
+  - it: renders node selectors and tolerations in the parser's format
+    set:
+      <<: *valid
+      runner.nodeSelectors:
+        zone: a
+        disktype: ssd
+      runner.tolerations:
+        - key: dedicated
+          value: sync-jobs
+          effect: NoSchedule
+        - key: gpu
+          effect: NoSchedule
+    asserts:
+      - equal:
+          path: data.KUBERNETES_NODE_SELECTORS
+          value: "disktype=ssd,zone=a"
+      - equal:
+          path: data.KUBERNETES_TOLERATIONS
+          value: "dedicated=sync-jobs:NoSchedule,gpu:NoSchedule"
+
+  - it: scheduler role uses the *_ROLE prefix and tags use the role-specific names
+    set:
+      <<: *valid
+      runner.executors.scheduler.memoryMaximum: 4096
+      runner.executors.task.tags: "team=core"
+      runner.executors.bulk.tags: "team=data"
+    asserts:
+      - equal:
+          path: data.SCHEDULER_ROLE_MEMORY_MAXIMUM
+          value: "4096"
+      - equal:
+          path: data.TASK_EXECUTOR_TAGS
+          value: "team=core"
+      - equal:
+          path: data.BULK_TASK_EXECUTOR_TAGS
+          value: "team=data"
+
+  - it: a toleration without an effect fails the render
+    set:
+      <<: *valid
+      runner.tolerations:
+        - key: dedicated
+          value: sync-jobs
+    asserts:
+      - failedTemplate:
+          errorPattern: runner.tolerations\[\].effect is required
+
+  # --- logging and APM gating
+  - it: emits no logging or APM env when everything is off
+    set: *valid
+    asserts:
+      - notExists:
+          path: data.EXECUTION_LOGS_V2
+      - notExists:
+          path: data.VECTOR_DAEMONSET
+      - notExists:
+          path: data.SEND_LOGS
+      - notExists:
+          path: data.INTERNAL_EXECUTION_LOGS
+      - notExists:
+          path: data.DD_AGENT_HOST
+
+  - it: Vector DaemonSet sets EXECUTION_LOGS_V2 and VECTOR_DAEMONSET
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+    asserts:
+      - equal:
+          path: data.EXECUTION_LOGS_V2
+          value: "true"
+      - equal:
+          path: data.VECTOR_DAEMONSET
+          value: "true"
+      - notExists:
+          path: data.SEND_LOGS
+
+  - it: embeddedVector sets INTERNAL_EXECUTION_LOGS and managedLogs sets SEND_LOGS
+    set:
+      <<: *valid
+      embeddedVector.enabled: true
+      vector.managedLogs: true
+    asserts:
+      - equal:
+          path: data.INTERNAL_EXECUTION_LOGS
+          value: "true"
+      - equal:
+          path: data.EXECUTION_LOGS_V2
+          value: "true"
+      - equal:
+          path: data.SEND_LOGS
+          value: "true"
+
+  - it: managedLogs alone sets nothing
+    set:
+      <<: *valid
+      vector.managedLogs: true
+    asserts:
+      - notExists:
+          path: data.SEND_LOGS
+
+  - it: Datadog DaemonSet sets DD_AGENT_HOST to the agent Service
+    release:
+      name: rel
+    set:
+      <<: *valid
+      datadog.daemonset.enabled: true
+    asserts:
+      - equal:
+          path: data.DD_AGENT_HOST
+          value: rel-polytomic-datadog
+
+  - it: DD_AGENT_HOST is settable in config for an external agent
+    set:
+      <<: *valid
+      config.DD_AGENT_HOST: datadog.datadog.svc.cluster.local
+    asserts:
+      - equal:
+          path: data.DD_AGENT_HOST
+          value: datadog.datadog.svc.cluster.local
+
+  - it: DD_AGENT_HOST in config is rejected while the chart's agent runs
+    set:
+      <<: *valid
+      datadog.daemonset.enabled: true
+      config.DD_AGENT_HOST: elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: config.DD_AGENT_HOST is a reserved key
+
+  # --- required values
+  # The schema rejects these before the helper's own message is reached.
+  - it: fails without image.tag
+    set:
+      <<: *valid
+      image.tag: ""
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails without operationalBucket.name
+    set:
+      <<: *valid
+      operationalBucket.name: ""
+    asserts:
+      - failedTemplate: {}
+
+  - it: fails without database.host when postgresql is disabled
+    set:
+      <<: *valid
+      database.host: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: database.host is required
+
+  - it: fails without externalRedis.host when redis is disabled
+    set:
+      <<: *valid
+      externalRedis.host: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: externalRedis.host is required

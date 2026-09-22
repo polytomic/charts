@@ -1,0 +1,6 @@
+app checksum snapshot, for comparison with the MCP one:
+  1: |
+    f72b8a3901c59624b9ca21efcc2d5f4002d4d49c972ce7f98428c7ad2ee11671
+has its own checksum, distinct from the app's:
+  1: |
+    95053703591ad79c3b95ac81dbe3322341fddf8b2ae91056dd5bcacb7e497d60

@@ -1,0 +1,52 @@
+suite: config and checksum
+templates:
+  - templates/configmap.yaml
+  - templates/deployment.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+
+tests:
+  - it: merges flat config and consumer extra data
+    set:
+      <<: *valid
+      config.FOO: bar
+      config.FLAG: false
+      config.COUNT: 0
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: data.FOO
+          value: bar
+      - equal:
+          path: data.FLAG
+          value: "false"
+      - equal:
+          path: data.COUNT
+          value: "0"
+      - equal:
+          path: data.PORT
+          value: "5200"
+      - equal:
+          path: data.PRIMARY_SECRET
+          value: ut-secret
+
+  - it: rejects reserved keys
+    set:
+      <<: *valid
+      config.PORT: "9999"
+    template: templates/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.PORT is a reserved key
+
+  - it: stamps the deployment with a config checksum
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: ^[0-9a-f]{64}$
+      - matchSnapshot:
+          path: spec.template.metadata.annotations["checksum/config"]

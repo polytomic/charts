@@ -1,0 +1,218 @@
+# Shaped like a single-service consumer (ping). Exercises every lib feature.
+
+image:
+  registry: ""
+  name: test-consumer
+  tag: "0.0.0-test"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+revisionHistoryLimit: 10
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podSecurityContext:
+  fsGroup: 2000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
+  runAsUser: 0
+
+config: {}
+
+secrets:
+  external:
+    apiVersion: ""
+    defaults:
+      refreshInterval: 1h
+      asm:
+        storeName: aws-secrets-manager
+        storeKind: ClusterSecretStore
+      gcpsm:
+        storeName: gcp-secret-manager
+        storeKind: ClusterSecretStore
+    entries: []
+  existing: []
+
+healthProbes:
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startupProbe:
+    enabled: false
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+services:
+  defaults:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    podLabels: {}
+    initContainers: []
+    volumes: []
+    volumeMounts: []
+
+  http:
+    enabled: true
+    replicas: 2
+    resources:
+      limits:
+        cpu: 256m
+        memory: 512Mi
+      requests:
+        cpu: 128m
+        memory: 256Mi
+    strategy: {}
+    terminationGracePeriodSeconds: 30
+    minReadySeconds: 0
+    priorityClassName: ""
+    nodeSelector: {}
+    affinity: {}
+    tolerations: []
+    topologySpreadConstraints: []
+    initContainers: []
+    lifecycle: {}
+    env: {}
+    extraEnv: []
+    extraEnvFrom: []
+    podAnnotations: {}
+    podLabels: {}
+    volumeMounts: []
+    volumes: []
+    service:
+      type: ClusterIP
+      port: 5200
+      targetPort: 5200
+      nodePort: ""
+      annotations: {}
+      externalTrafficPolicy: ""
+    healthCheck:
+      enabled: true
+      path: "/status.txt"
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+      behavior: {}
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: ""
+      maxUnavailable: ""
+
+networkPolicy:
+  enabled: false
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: ingress-nginx
+  ingressCidrs: []
+  egress: []
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: consumer.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Consumed by test-consumer.extraEgress so the hook can be exercised.
+extraEgress: []
+
+# A second component rendered with name "sidecar", the way the polytomic chart
+# renders MCP. Exercises prefixed naming, labels and helper dispatch.
+sidecar:
+  enabled: false
+  image:
+    registry: ""
+    name: sidecar
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  serviceAccount:
+    create: true
+    automount: false
+    annotations: {}
+    name: ""
+  podSecurityContext: {}
+  securityContext: {}
+  config: {}
+  secrets:
+    external:
+      apiVersion: ""
+      defaults: {}
+      entries: []
+    existing: []
+  healthProbes:
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    livenessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    startupProbe:
+      enabled: false
+  services:
+    defaults:
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      podAnnotations: {}
+      podLabels: {}
+      initContainers: []
+      volumes: []
+      volumeMounts: []
+    worker:
+      enabled: true
+      replicas: 1
+      resources: {}
+      env: {}
+      service:
+        type: ClusterIP
+        port: 9000
+        targetPort: 9000
+      healthCheck:
+        enabled: false
+      autoscaling:
+        enabled: false
+      podDisruptionBudget:
+        enabled: false
+  networkPolicy:
+    enabled: false
+    ingressNamespaceSelector: {}
+    ingressCidrs: []
+    egress: []
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    tls: []
+  extraEgress: []

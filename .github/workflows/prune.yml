@@ -1,0 +1,48 @@
+name: Prune dev builds
+
+# Deletes prerelease (<version>-<sha>) package versions older than 30 days
+# from both GHCR packages. Release versions are never touched.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+env:
+  MAX_AGE_DAYS: 30
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old prerelease versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${MAX_AGE_DAYS} days" +%s)
+          # Package endpoints differ for organisations and user accounts.
+          if [[ "$(gh api "/users/$OWNER" --jq .type)" == "Organization" ]]; then
+            base="/orgs/$OWNER"
+          else
+            base="/users/$OWNER"
+          fi
+          for pkg in charts/polytomic-base charts/polytomic; do
+            encoded=${pkg//\//%2F}
+            gh api --paginate "$base/packages/container/$encoded/versions" \
+              --jq -c '.[] | {id, created_at, tags: .metadata.container.tags}' \
+            | while IFS= read -r v; do
+                id=$(jq -r '.id' <<<"$v")
+                created=$(date -u -d "$(jq -r '.created_at' <<<"$v")" +%s)
+                tags=$(jq -r '.tags[]?' <<<"$v")
+                # Only prerelease tags (a -<sha> suffix), and only past the cutoff.
+                if ! grep -qE -- '-[0-9a-f]{8}$' <<<"$tags"; then continue; fi
+                if (( created > cutoff )); then continue; fi
+                echo "deleting $pkg version $id ($tags)"
+                gh api -X DELETE "$base/packages/container/$encoded/versions/$id"
+              done
+          done

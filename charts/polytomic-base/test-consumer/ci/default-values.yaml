@@ -1,0 +1,3 @@
+secrets:
+  existing:
+    - name: ci-placeholder-secrets

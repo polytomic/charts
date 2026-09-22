@@ -1,0 +1,116 @@
+{{- if .Values.vector.daemonset.enabled }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- $vd := .Values.vector.daemonset -}}
+{{- $image := include "polytomic.vectorImage" $ctx -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-vector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: vector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "polytomic-base.name" $ctx }}-vector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/vector-configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "polytomic-base.name" $ctx }}-vector
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "polytomic.vectorServiceAccountName" $ctx }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Vector runs as root to read /var/log/pods from the host.
+      initContainers:
+      - name: init-vector-config
+        image: {{ $image }}
+        imagePullPolicy: {{ $vd.imagePullPolicy }}
+        command: ['sh', '-c', 'cp /etc/vector-base/vector.toml /etc/vector/vector.toml']
+        volumeMounts:
+        - name: config-base
+          mountPath: /etc/vector-base
+          readOnly: true
+        - name: config-writable
+          mountPath: /etc/vector
+      containers:
+      - name: vector
+        image: {{ $image }}
+        imagePullPolicy: {{ $vd.imagePullPolicy }}
+        command:
+          - /entrypoint.sh
+        env:
+        - name: SEND_LOGS
+          value: {{ .Values.vector.managedLogs | quote }}
+        - name: VECTOR_SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_LABEL_SELECTOR
+          value: {{ $vd.podLabelSelector | quote }}
+        - name: EXECUTION_LOG_BUCKET
+          value: {{ include "polytomic.bucketName" $ctx | quote }}
+        {{- if not (include "polytomic.bucketIsGcs" $ctx) }}
+        - name: AWS_REGION
+          value: {{ .Values.operationalBucket.region | quote }}
+        {{- end }}
+        # ptconf reads DEPLOYMENT and DEPLOYMENT_KEY to decrypt the Datadog key.
+        - name: DEPLOYMENT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "polytomic-base.configmapName" $ctx }}
+              key: DEPLOYMENT
+        {{- with $vd.secrets.existing }}
+        envFrom:
+        {{- range . }}
+        - secretRef:
+            name: {{ .name }}
+        {{- end }}
+        {{- end }}
+        volumeMounts:
+        - name: config-writable
+          mountPath: /etc/vector
+        - name: var-log
+          mountPath: /var/log
+          readOnly: true
+        - name: var-lib-vector
+          mountPath: /var/lib/vector
+        resources:
+          {{- toYaml $vd.resources | nindent 10 }}
+      volumes:
+      - name: config-base
+        configMap:
+          name: {{ include "polytomic-base.fullname" $ctx }}-vector
+      - name: config-writable
+        emptyDir: {}
+      - name: var-log
+        hostPath:
+          path: /var/log
+      - name: var-lib-vector
+        {{- if eq $vd.dataDir.type "emptyDir" }}
+        emptyDir: {}
+        {{- else }}
+        hostPath:
+          path: /var/lib/vector
+          type: DirectoryOrCreate
+        {{- end }}
+      {{- with $vd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $vd.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $vd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

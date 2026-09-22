@@ -1,0 +1,173 @@
+suite: storage and rbac
+templates:
+  - templates/configmap.yaml
+  - templates/persistentvolume.yaml
+  - templates/persistentvolumeclaims.yaml
+  - templates/role.yaml
+  - templates/rolebinding.yaml
+  - templates/serviceaccount.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  secrets.existing:
+    - name: ut-secrets
+
+tests:
+  - it: static mode renders a PV with any CSI driver and attributes, bound by the PVC
+    set:
+      <<: *valid
+      sharedVolume.mode: static
+      sharedVolume.static.driver: nfs.csi.k8s.io
+      sharedVolume.static.volumeHandle: nfs-server.example.com/exports/pt
+      sharedVolume.static.volumeAttributes:
+        server: nfs-server.example.com
+        share: /exports/pt
+      sharedVolume.persistentVolume.reclaimPolicy: Delete
+    asserts:
+      - equal:
+          path: spec.csi.driver
+          value: nfs.csi.k8s.io
+        template: templates/persistentvolume.yaml
+      - equal:
+          path: spec.csi.volumeAttributes.share
+          value: /exports/pt
+        template: templates/persistentvolume.yaml
+      - equal:
+          path: spec.persistentVolumeReclaimPolicy
+          value: Delete
+        template: templates/persistentvolume.yaml
+      - equal:
+          path: spec.volumeName
+          value: polytomic-data
+        template: templates/persistentvolumeclaims.yaml
+      - equal:
+          path: spec.storageClassName
+          value: ""
+        template: templates/persistentvolumeclaims.yaml
+
+  - it: static mode without a volumeHandle fails
+    set:
+      <<: *valid
+      sharedVolume.mode: static
+      sharedVolume.static.volumeHandle: ""
+    template: templates/persistentvolume.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: sharedVolume.static.volumeHandle is required
+
+  - it: dynamic mode renders only a PVC with the StorageClass
+    set:
+      <<: *valid
+      sharedVolume.mode: dynamic
+      sharedVolume.dynamic.storageClassName: nfs
+      sharedVolume.size: 50Gi
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/persistentvolume.yaml
+      - equal:
+          path: spec.storageClassName
+          value: nfs
+        template: templates/persistentvolumeclaims.yaml
+      - equal:
+          path: spec.resources.requests.storage
+          value: 50Gi
+        template: templates/persistentvolumeclaims.yaml
+
+  - it: dynamic mode with no StorageClass omits the field for the cluster default
+    set:
+      <<: *valid
+      sharedVolume.mode: dynamic
+    template: templates/persistentvolumeclaims.yaml
+    asserts:
+      - notExists:
+          path: spec.storageClassName
+
+  - it: emptyDir mode renders neither PV nor PVC
+    set:
+      <<: *valid
+      sharedVolume.mode: emptyDir
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/persistentvolume.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/persistentvolumeclaims.yaml
+
+  - it: rejects an unknown sharedVolume.mode (schema-enforced)
+    set:
+      <<: *valid
+      sharedVolume.mode: hostPath
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {}
+
+  - it: grants a namespaced Role for pods and jobs only
+    release:
+      name: rel
+      namespace: pt
+    set:
+      <<: *valid
+      sharedVolume.mode: dynamic
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+        template: templates/role.yaml
+      - equal:
+          path: metadata.namespace
+          value: pt
+        template: templates/role.yaml
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [pods]
+              verbs: [get, list, watch]
+            - apiGroups: [batch]
+              resources: [jobs]
+              verbs: [get, list, watch, create, update, patch, delete]
+        template: templates/role.yaml
+      - equal:
+          path: roleRef.kind
+          value: Role
+        template: templates/rolebinding.yaml
+      - equal:
+          path: subjects[0].name
+          value: rel-polytomic
+        template: templates/rolebinding.yaml
+
+  - it: skips RBAC and the ServiceAccount when serviceAccount.create is false
+    set:
+      <<: *valid
+      sharedVolume.mode: dynamic
+      serviceAccount.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/role.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/rolebinding.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/serviceaccount.yaml
+
+  - it: passes ServiceAccount annotations through for workload identity
+    set:
+      <<: *valid
+      sharedVolume.mode: dynamic
+      serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::1:role/pt
+    template: templates/serviceaccount.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["eks.amazonaws.com/role-arn"]
+          value: arn:aws:iam::1:role/pt

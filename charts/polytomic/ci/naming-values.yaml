@@ -1,0 +1,51 @@
+# Name overrides with MCP enabled, ingress on, alternate registry.
+image:
+  registry: mirror.example.com/polytomic
+  tag: "0.0.0-test"
+
+nameOverride: pt
+fullnameOverride: pt
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+database:
+  host: "postgres.example.com"
+
+externalRedis:
+  host: "redis.example.com"
+
+operationalBucket:
+  provider: s3
+  name: ci-operational
+  region: us-east-1
+
+sharedVolume:
+  mode: dynamic
+
+secrets:
+  existing:
+    - name: ci-placeholder-secrets
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: polytomic.test
+      paths:
+        - path: /
+          pathType: Prefix
+
+mcp:
+  enabled: true
+  image:
+    tag: "9.9.9-mcp"
+  services:
+    http:
+      autoscaling:
+        enabled: true
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1

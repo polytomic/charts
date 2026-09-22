@@ -1,0 +1,60 @@
+# Vector and Datadog DaemonSets on, managed logs on, cronjobs on.
+image:
+  tag: "0.0.0-test"
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+database:
+  host: "postgres.example.com"
+
+externalRedis:
+  host: "redis.example.com"
+
+operationalBucket:
+  provider: s3
+  name: ci-operational
+  region: us-east-1
+
+sharedVolume:
+  mode: dynamic
+
+secrets:
+  existing:
+    - name: ci-placeholder-secrets
+
+vector:
+  managedLogs: true
+  daemonset:
+    enabled: true
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/vector
+    secrets:
+      existing:
+        - name: ci-deployment-key
+
+datadog:
+  daemonset:
+    enabled: true
+    secrets:
+      existing:
+        - name: ci-deployment-key
+
+cronjobs:
+  jobs:
+    weeklySummary:
+      enabled: true
+    dailySummary:
+      enabled: true
+
+networkPolicy:
+  enabled: true
+  ingressCidrs:
+    - 10.0.0.0/16
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0

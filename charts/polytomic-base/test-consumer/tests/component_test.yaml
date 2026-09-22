@@ -1,0 +1,194 @@
+suite: named component
+templates:
+  - templates/sidecar.yaml
+  - templates/deployment.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+  sidecar.enabled: true
+
+tests:
+  - it: renders nothing when the component is disabled
+    set:
+      <<: *valid
+      sidecar.enabled: false
+    template: templates/sidecar.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: prefixes resource names, the ConfigMap and the ServiceAccount with the component name
+    release:
+      name: rel
+    set: *valid
+    template: templates/sidecar.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-test-consumer-sidecar-config
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - equal:
+          path: metadata.name
+          value: rel-test-consumer-sidecar-worker
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: metadata.name
+          value: rel-test-consumer-sidecar
+        documentSelector:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: rel-test-consumer-sidecar
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: rel-test-consumer-sidecar-config
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: carries the component name in the name label and keeps the component label per service
+    set: *valid
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: test-consumer-sidecar
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: worker
+
+  - it: dispatches consumer helpers under <Chart.Name>.<name>
+    set:
+      <<: *valid
+      sidecar.config.FOO: bar
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.COMPONENT
+          value: sidecar
+      - equal:
+          path: data.FOO
+          value: bar
+      - notExists:
+          path: data.PORT
+
+  - it: applies the component's own reserved keys
+    set:
+      <<: *valid
+      sidecar.config.COMPONENT: x
+    template: templates/sidecar.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.COMPONENT is a reserved key
+
+  - it: componentImage inherits registry and tag from the primary image
+    set:
+      <<: *valid
+      image.registry: reg.example.com
+      image.tag: "1.2.3"
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.IMAGE
+          value: reg.example.com/sidecar:1.2.3
+
+  - it: componentImage honors explicit registry and tag
+    set:
+      <<: *valid
+      image.registry: reg.example.com
+      image.tag: "1.2.3"
+      sidecar.image.registry: other.example.com
+      sidecar.image.tag: "9.9.9"
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.IMAGE
+          value: other.example.com/sidecar:9.9.9
+
+  - it: uses only the component's secret sources
+    set:
+      <<: *valid
+      sidecar.secrets.existing:
+        - name: sidecar-secret
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: sidecar-secret
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: ut-secret
+
+  - it: selects only the component's pods in its NetworkPolicy and appends its own extraEgress
+    set:
+      <<: *valid
+      sidecar.networkPolicy.enabled: true
+      sidecar.extraEgress:
+        - to:
+            - ipBlock:
+                cidr: 192.168.0.0/16
+    template: templates/sidecar.yaml
+    documentSelector:
+      path: kind
+      value: NetworkPolicy
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: test-consumer-sidecar
+      - equal:
+          path: spec.egress[2].to[0].ipBlock.cidr
+          value: 192.168.0.0/16
+
+  - it: the primary component is unaffected by the named one
+    release:
+      name: rel
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-test-consumer-http
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: test-consumer
+
+  - it: a Deployment with every service disabled renders nothing and needs no secret source
+    set:
+      services.http.enabled: false
+    template: templates/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: omits env when neither env nor extraEnv is set
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env

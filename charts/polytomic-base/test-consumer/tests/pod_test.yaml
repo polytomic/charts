@@ -1,0 +1,156 @@
+suite: pod spec composition
+templates:
+  - templates/deployment.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+
+tests:
+  - it: concatenates defaults and per-service initContainers, rendered through tpl
+    set:
+      <<: *valid
+      services.defaults.initContainers:
+        - name: wait
+          image: busybox
+          env:
+            - name: CM
+              valueFrom:
+                configMapKeyRef:
+                  name: '{{ include "polytomic-base.configmapName" . }}'
+                  key: PORT
+      services.http.initContainers:
+        - name: second
+          image: '{{ .root.Values.image.name }}'
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait
+      - equal:
+          path: spec.template.spec.initContainers[0].env[0].valueFrom.configMapKeyRef.name
+          value: RELEASE-NAME-test-consumer-config
+      - equal:
+          path: spec.template.spec.initContainers[1].image
+          value: test-consumer
+
+  - it: concatenates defaults and per-service volumes and mounts through tpl
+    set:
+      <<: *valid
+      services.defaults.volumes:
+        - name: shared
+          emptyDir: {}
+      services.defaults.volumeMounts:
+        - name: shared
+          mountPath: '{{ printf "/var/%s" .root.Chart.Name }}'
+      services.http.volumes:
+        - name: extra
+          emptyDir: {}
+      services.http.volumeMounts:
+        - name: extra
+          mountPath: /extra
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: shared
+      - equal:
+          path: spec.template.spec.volumes[1].name
+          value: extra
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /var/test-consumer
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1].mountPath
+          value: /extra
+
+  - it: omits volumes and initContainers when none are set
+    set: *valid
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: per-service nodeSelector replaces defaults
+    set:
+      <<: *valid
+      services.defaults.nodeSelector:
+        pool: default
+      services.http.nodeSelector:
+        pool: web
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: web
+
+  - it: falls back to defaults nodeSelector
+    set:
+      <<: *valid
+      services.defaults.nodeSelector:
+        pool: default
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: default
+
+  - it: podLabels and podAnnotations are additive
+    set:
+      <<: *valid
+      services.defaults.podLabels:
+        a: "1"
+      services.http.podLabels:
+        b: "2"
+      services.defaults.podAnnotations:
+        x: "1"
+      services.http.podAnnotations:
+        y: "2"
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.a
+          value: "1"
+      - equal:
+          path: spec.template.metadata.labels.b
+          value: "2"
+      - equal:
+          path: spec.template.metadata.annotations.x
+          value: "1"
+      - equal:
+          path: spec.template.metadata.annotations.y
+          value: "2"
+
+  - it: per-service image overrides fall back per field
+    set:
+      <<: *valid
+      image.registry: reg.example.com
+      services.http.image.tag: custom
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: reg.example.com/test-consumer:custom
+
+  - it: omits replicas when autoscaling is on
+    set:
+      <<: *valid
+      services.http.autoscaling.enabled: true
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: renders a startup probe when enabled
+    set:
+      <<: *valid
+      healthProbes.startupProbe.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /status.txt
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+
+  - it: skips disabled services
+    set:
+      <<: *valid
+      services.http.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

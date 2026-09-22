@@ -1,0 +1,25 @@
+{{- if eq .Values.sharedVolume.mode "static" }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- $sv := .Values.sharedVolume -}}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ $sv.persistentVolume.name }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ $sv.size }}
+  volumeMode: Filesystem
+  accessModes:
+    {{- toYaml $sv.accessModes | nindent 4 }}
+  persistentVolumeReclaimPolicy: {{ $sv.persistentVolume.reclaimPolicy }}
+  storageClassName: ""
+  csi:
+    driver: {{ required "sharedVolume.static.driver is required for static mode" $sv.static.driver }}
+    volumeHandle: {{ required "sharedVolume.static.volumeHandle is required for static mode" $sv.static.volumeHandle }}
+    {{- with $sv.static.volumeAttributes }}
+    volumeAttributes:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,4 @@
+{{- $values := deepCopy .Values -}}
+{{- $ctx := dict "root" . "values" $values "name" "" -}}
+{{- include "polytomic.decorateAppValues" (dict "ctx" $ctx "target" $values) -}}
+{{- include "polytomic-base.deployment" $ctx }}

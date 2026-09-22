@@ -1,0 +1,24 @@
+{{- if ne .Values.sharedVolume.mode "emptyDir" }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- $sv := .Values.sharedVolume -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $sv.persistentVolumeClaim.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    {{- toYaml $sv.accessModes | nindent 4 }}
+  {{- if eq $sv.mode "static" }}
+  storageClassName: ""
+  volumeName: {{ $sv.persistentVolume.name }}
+  {{- else if $sv.dynamic.storageClassName }}
+  storageClassName: {{ $sv.dynamic.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $sv.size }}
+{{- end }}

@@ -1,0 +1,89 @@
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- range $jobName, $jobConfig := .Values.cronjobs.jobs }}
+{{- if $jobConfig.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-{{ $jobName | kebabcase }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: cronjob-{{ $jobName | kebabcase }}
+spec:
+  schedule: {{ $jobConfig.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          {{- with $.Values.services.defaults.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          labels:
+            {{- include "polytomic-base.selectorLabels" $ctx | nindent 12 }}
+            app.kubernetes.io/component: cronjob-{{ $jobName | kebabcase }}
+            {{- with $.Values.services.defaults.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $.Values.vector.daemonset.enabled }}
+            vector.dev/include: "true"
+            {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "polytomic-base.serviceAccountName" $ctx }}
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: {{ $jobName | kebabcase }}
+              securityContext:
+                {{- toYaml $.Values.securityContext | nindent 16 }}
+              image: {{ include "polytomic-base.image" (dict "registry" $.Values.image.registry "image" $.Values.image.name "tag" $.Values.image.tag) }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["/bin/sh", "-c"]
+              args: [{{ $jobConfig.command | join " " | quote }}]
+              env:
+                - name: ROLE
+                  value: "cronjob"
+                {{- if $jobConfig.service }}
+                - name: SERVICE
+                  value: {{ $jobConfig.service | quote }}
+                {{- end }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "polytomic-base.configmapName" $ctx }}
+                {{- range $.Values.secrets.external.entries }}
+                - secretRef:
+                    name: {{ .name }}
+                {{- end }}
+                {{- range $.Values.secrets.existing }}
+                - secretRef:
+                    name: {{ .name }}
+                {{- end }}
+              resources:
+                {{- toYaml $.Values.cronjobs.defaults.resources | nindent 16 }}
+              volumeMounts:
+                - {{- include "polytomic.sharedVolumeMount" $ctx | nindent 18 }}
+          volumes:
+            - {{- include "polytomic.sharedVolume" $ctx | nindent 14 }}
+          {{- with $.Values.services.defaults.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.services.defaults.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.services.defaults.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

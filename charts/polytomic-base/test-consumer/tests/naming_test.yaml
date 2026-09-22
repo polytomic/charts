@@ -1,0 +1,83 @@
+suite: naming
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/configmap.yaml
+  - templates/serviceaccount.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+
+tests:
+  - it: names resources <release>-<chart>-<service> when release lacks the chart name
+    release:
+      name: rel
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-test-consumer-http
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: test-consumer
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: rel-test-consumer
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: rel-test-consumer-config
+
+  - it: uses the release name alone when it contains the chart name
+    release:
+      name: test-consumer-prod
+    set: *valid
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-consumer-prod-http
+
+  - it: honors fullnameOverride
+    release:
+      name: rel
+    set:
+      <<: *valid
+      fullnameOverride: tc
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tc-config
+
+  - it: honors nameOverride in the name label and derived fullname
+    release:
+      name: rel
+    set:
+      <<: *valid
+      nameOverride: custom
+    template: templates/serviceaccount.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-custom
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: custom
+
+  - it: sets standard labels
+    release:
+      name: rel
+    set: *valid
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: test-consumer
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: http
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: test-consumer-0.0.0

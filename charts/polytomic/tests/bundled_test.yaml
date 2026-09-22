@@ -1,0 +1,180 @@
+suite: bundled postgres and redis
+# Subchart StatefulSets include sibling templates for checksums, and
+# helm-unittest only loads the templates a suite lists, so those are listed too.
+templates:
+  - templates/configmap.yaml
+  - templates/networkpolicy.yaml
+  - charts/postgresql/templates/primary/statefulset.yaml
+  - charts/postgresql/templates/primary/configmap.yaml
+  - charts/postgresql/templates/primary/extended-configmap.yaml
+  - charts/postgresql/templates/secrets.yaml
+  - charts/redis/templates/master/application.yaml
+  - charts/redis/templates/configmap.yaml
+  - charts/redis/templates/health-configmap.yaml
+  - charts/redis/templates/scripts-configmap.yaml
+  - charts/redis/templates/secret.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: polytomic-secrets
+  postgresql.enabled: true
+  postgresql.auth.existingSecret: polytomic-secrets
+  redis.enabled: true
+  redis.auth.existingSecret: polytomic-secrets
+
+tests:
+  - it: builds URLs from the pinned subchart names with password placeholders
+    set: *valid
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: data.DATABASE_URL
+          value: "postgres://polytomic:${DATABASE_PASSWORD}@polytomic-postgresql:5432/polytomic?sslmode=disable"
+      - equal:
+          path: data.REDIS_URL
+          value: "redis://:${REDIS_PASSWORD}@polytomic-redis-master:6379"
+
+  - it: follows subchart fullnameOverride and auth values
+    set:
+      <<: *valid
+      postgresql.fullnameOverride: pg
+      postgresql.auth.username: app
+      postgresql.auth.database: appdb
+      redis.fullnameOverride: cache
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: data.DATABASE_URL
+          value: "postgres://app:${DATABASE_PASSWORD}@pg:5432/appdb?sslmode=disable"
+      - equal:
+          path: data.REDIS_URL
+          value: "redis://:${REDIS_PASSWORD}@cache-master:6379"
+
+  - it: the Postgres StatefulSet reads the customer Secret's DATABASE_PASSWORD key
+    set: *valid
+    template: charts/postgresql/templates/primary/statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POSTGRES_PASSWORD_FILE
+            value: /opt/bitnami/postgresql/secrets/DATABASE_PASSWORD
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POSTGRES_POSTGRES_PASSWORD_FILE
+            value: /opt/bitnami/postgresql/secrets/DATABASE_PASSWORD
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: postgresql-password
+            secret:
+              secretName: polytomic-secrets
+
+  - it: the Redis StatefulSet reads the customer Secret's REDIS_PASSWORD key
+    set: *valid
+    template: charts/redis/templates/master/application.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="redis-password")].secret.secretName
+          value: polytomic-secrets
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="redis-password")].secret.items[0].key
+          value: REDIS_PASSWORD
+
+  - it: adds egress rules for both subcharts to the NetworkPolicy
+    release:
+      name: rel
+    set:
+      <<: *valid
+      networkPolicy.enabled: true
+    template: templates/networkpolicy.yaml
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: postgresql
+                    app.kubernetes.io/instance: rel
+            ports:
+              - protocol: TCP
+                port: 5432
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis
+                    app.kubernetes.io/instance: rel
+            ports:
+              - protocol: TCP
+                port: 6379
+
+  - it: neither subchart renders a Secret
+    set: *valid
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: charts/postgresql/templates/secrets.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/redis/templates/secret.yaml
+
+  - it: fails when the Postgres admin key name is not DATABASE_PASSWORD
+    set:
+      <<: *valid
+      postgresql.auth.secretKeys.adminPasswordKey: postgres-password
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: adminPasswordKey must be DATABASE_PASSWORD
+
+  - it: fails when postgresql.auth.existingSecret is unset
+    set:
+      <<: *valid
+      postgresql.auth.existingSecret: ""
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: postgresql.auth.existingSecret is required
+
+  - it: fails when the subchart Secret is not a configured secret source
+    set:
+      <<: *valid
+      redis.auth.existingSecret: somewhere-else
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: redis.auth.existingSecret "somewhere-else" must also be listed
+
+  - it: accepts an ESO entry as the subchart Secret
+    set:
+      <<: *valid
+      secrets.existing: []
+      secrets.external.entries:
+        - name: polytomic-secrets
+          source: { type: asm, path: ut/polytomic }
+          data: [DATABASE_PASSWORD, REDIS_PASSWORD]
+    template: templates/configmap.yaml
+    asserts:
+      - equal:
+          path: data.KUBERNETES_SECRET
+          value: polytomic-secrets
+
+  - it: fails when the Postgres key name is not DATABASE_PASSWORD
+    set:
+      <<: *valid
+      postgresql.auth.secretKeys.userPasswordKey: password
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: userPasswordKey must be DATABASE_PASSWORD

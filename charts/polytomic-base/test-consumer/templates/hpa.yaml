@@ -1,0 +1,1 @@
+{{- include "polytomic-base.hpa" (dict "root" . "values" .Values "name" "") }}

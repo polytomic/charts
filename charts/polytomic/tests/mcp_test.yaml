@@ -1,0 +1,345 @@
+suite: mcp
+templates:
+  - templates/mcp/configmap.yaml
+  - templates/mcp/deployment.yaml
+  - templates/mcp/service.yaml
+  - templates/mcp/serviceaccount.yaml
+  - templates/mcp/hpa.yaml
+  - templates/mcp/poddisruptionbudget.yaml
+  - templates/mcp/ingress.yaml
+  - templates/mcp/networkpolicy.yaml
+  - templates/mcp/externalsecret.yaml
+  - templates/role.yaml
+  - templates/rolebinding.yaml
+  - templates/deployment.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  image.registry: "reg.example.com"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: ut-secrets
+  mcp.enabled: true
+
+tests:
+  - it: renders nothing when disabled
+    set:
+      <<: *valid
+      mcp.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/mcp/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/mcp/configmap.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/mcp/service.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/mcp/serviceaccount.yaml
+
+  - it: names MCP resources <fullname>-mcp-* with their own name label
+    release:
+      name: rel
+    set: *valid
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-mcp-http
+        template: templates/mcp/deployment.yaml
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: polytomic-mcp
+        template: templates/mcp/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-mcp-config
+        template: templates/mcp/configmap.yaml
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-mcp
+        template: templates/mcp/serviceaccount.yaml
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-mcp-http
+        template: templates/mcp/service.yaml
+
+  - it: defaults the base URL to the app Service and the auth server to auth.url
+    release:
+      name: rel
+    set: *valid
+    template: templates/mcp/configmap.yaml
+    asserts:
+      - equal:
+          path: data.POLYTOMIC_BASE_URL
+          value: http://rel-polytomic-app:5100
+      - equal:
+          path: data.POLYTOMIC_AUTH_SERVER_URL
+          value: https://polytomic.test
+      - equal:
+          path: data.POLYTOMIC_API_VERSION
+          value: "2025-09-18"
+      - equal:
+          path: data.POLYTOMIC_HTTP_HOST
+          value: "0.0.0.0"
+      - equal:
+          path: data.POLYTOMIC_HTTP_PORT
+          value: "3000"
+      - notExists:
+          path: data.POLYTOMIC_MCP_PUBLIC_ORIGIN
+
+  - it: honors explicit base, auth server and public origin URLs
+    set:
+      <<: *valid
+      mcp.polytomic.baseUrl: https://api.polytomic.test
+      mcp.polytomic.authServerUrl: https://login.polytomic.test
+      mcp.polytomic.publicOrigin: https://mcp.polytomic.test
+    template: templates/mcp/configmap.yaml
+    asserts:
+      - equal:
+          path: data.POLYTOMIC_BASE_URL
+          value: https://api.polytomic.test
+      - equal:
+          path: data.POLYTOMIC_AUTH_SERVER_URL
+          value: https://login.polytomic.test
+      - equal:
+          path: data.POLYTOMIC_MCP_PUBLIC_ORIGIN
+          value: https://mcp.polytomic.test
+
+  - it: keeps the app's config out of the MCP ConfigMap
+    set:
+      <<: *valid
+      config.LOG_LEVEL: debug
+      mcp.config.ENABLE_FEEDBACK_TOOL: "true"
+    template: templates/mcp/configmap.yaml
+    asserts:
+      - notExists:
+          path: data.DATABASE_URL
+      - notExists:
+          path: data.LOG_LEVEL
+      - equal:
+          path: data.ENABLE_FEEDBACK_TOOL
+          value: "true"
+
+  - it: rejects reserved MCP keys in mcp.config
+    set:
+      <<: *valid
+      mcp.config.POLYTOMIC_BASE_URL: "x"
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.POLYTOMIC_BASE_URL is a reserved key
+
+  - it: rejects secret-only keys in mcp.config
+    set:
+      <<: *valid
+      mcp.config.POLYTOMIC_APPROVAL_SECRET: "x"
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.POLYTOMIC_APPROVAL_SECRET is a reserved key
+
+  - it: rejects MODEM_PUBLIC_KEY in mcp.config
+    set:
+      <<: *valid
+      mcp.config.MODEM_PUBLIC_KEY: "x"
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.MODEM_PUBLIC_KEY is a reserved key
+
+  - it: attaches only MCP secret sources and the MCP ConfigMap
+    release:
+      name: rel
+    set:
+      <<: *valid
+      mcp.secrets.existing:
+        - name: mcp-secrets
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: rel-polytomic-mcp-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: mcp-secrets
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: ut-secrets
+
+  - it: runs without any MCP secret source
+    set: *valid
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
+
+  - it: uses its own ServiceAccount with no token and no RoleBinding
+    release:
+      name: rel
+    set: *valid
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: rel-polytomic-mcp
+        template: templates/mcp/deployment.yaml
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+        template: templates/mcp/serviceaccount.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/rolebinding.yaml
+      - equal:
+          path: subjects[0].name
+          value: rel-polytomic
+        template: templates/rolebinding.yaml
+
+  - it: inherits registry and tag from image.* and allows overrides
+    set: *valid
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: reg.example.com/polytomic-mcp:0.0.0-test
+
+  - it: overrides the MCP image tag independently
+    set:
+      <<: *valid
+      mcp.image.tag: "9.9.9"
+      mcp.image.registry: "other.example.com"
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: other.example.com/polytomic-mcp:9.9.9
+
+  - it: uses the faster MCP readiness timings and no shared volume
+    set: *valid
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: has its own checksum, distinct from the app's
+    set: *valid
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: ^[0-9a-f]{64}$
+        template: templates/mcp/deployment.yaml
+      - matchSnapshot:
+          path: spec.template.metadata.annotations["checksum/config"]
+        template: templates/mcp/deployment.yaml
+
+  - it: app checksum snapshot, for comparison with the MCP one
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: app
+    asserts:
+      - matchSnapshot:
+          path: spec.template.metadata.annotations["checksum/config"]
+
+  - it: renders its own ingress, NetworkPolicy, HPA and PDB when enabled
+    release:
+      name: rel
+    set:
+      <<: *valid
+      mcp.ingress.enabled: true
+      mcp.ingress.className: alb
+      mcp.networkPolicy.enabled: true
+      mcp.services.http.autoscaling.enabled: true
+      mcp.services.http.podDisruptionBudget.enabled: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: rel-polytomic-mcp-http
+        template: templates/mcp/ingress.yaml
+      - equal:
+          path: spec.ingressClassName
+          value: alb
+        template: templates/mcp/ingress.yaml
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: polytomic-mcp
+        template: templates/mcp/networkpolicy.yaml
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 3000
+        template: templates/mcp/networkpolicy.yaml
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: rel-polytomic-mcp-http
+        template: templates/mcp/hpa.yaml
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-mcp-http
+        template: templates/mcp/poddisruptionbudget.yaml
+
+  - it: follows the top-level fullnameOverride
+    set:
+      <<: *valid
+      fullnameOverride: pt
+    template: templates/mcp/configmap.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: pt-mcp-config
+      - equal:
+          path: data.POLYTOMIC_BASE_URL
+          value: http://pt-app:5100
+
+  - it: renders MCP ExternalSecrets from mcp.secrets.external with mapped keys
+    set:
+      <<: *valid
+      mcp.secrets.external.entries:
+        - name: mcp-eso
+          source: { type: asm, path: ut/mcp }
+          data:
+            - POLYTOMIC_APPROVAL_SECRET
+            - k8sKey: MODEM_PUBLIC_KEY
+              remoteKey: modem_public_key
+    template: templates/mcp/externalsecret.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mcp-eso
+      - equal:
+          path: spec.target.name
+          value: mcp-eso
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: polytomic-mcp
+      - contains:
+          path: spec.data
+          content:
+            secretKey: POLYTOMIC_APPROVAL_SECRET
+            remoteRef:
+              key: ut/mcp
+              property: POLYTOMIC_APPROVAL_SECRET
+      - contains:
+          path: spec.data
+          content:
+            secretKey: MODEM_PUBLIC_KEY
+            remoteRef:
+              key: ut/mcp
+              property: modem_public_key

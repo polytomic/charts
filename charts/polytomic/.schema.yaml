@@ -1,0 +1,7 @@
+values:
+  - values.yaml
+output: values.schema.json
+draft: 2020
+schemaRoot:
+  id: https://github.com/polytomic/charts/polytomic/values.schema.json
+  title: polytomic chart values

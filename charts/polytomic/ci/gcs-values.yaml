@@ -1,0 +1,38 @@
+# GCS bucket, Google Secret Manager, Vector DaemonSet with emptyDir data dir.
+image:
+  tag: "0.0.0-test"
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+database:
+  host: "postgres.example.com"
+
+externalRedis:
+  host: "redis.example.com"
+
+operationalBucket:
+  provider: gcs
+  name: ci-operational
+
+sharedVolume:
+  mode: dynamic
+
+secrets:
+  external:
+    entries:
+      - name: polytomic-secrets
+        source:
+          type: gcpsm
+          path: polytomic
+        data:
+          - DEPLOYMENT_KEY
+          - DATABASE_PASSWORD
+
+vector:
+  daemonset:
+    enabled: true
+    dataDir:
+      type: emptyDir

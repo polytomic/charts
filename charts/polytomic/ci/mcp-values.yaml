@@ -1,0 +1,56 @@
+# MCP enabled with defaults, ESO secrets for both components.
+image:
+  tag: "0.0.0-test"
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+database:
+  host: "postgres.example.com"
+
+externalRedis:
+  host: "redis.example.com"
+
+operationalBucket:
+  provider: s3
+  name: ci-operational
+  region: us-east-1
+
+sharedVolume:
+  mode: dynamic
+
+secrets:
+  external:
+    entries:
+      - name: polytomic-secrets
+        source:
+          type: asm
+          path: ci/polytomic
+        data:
+          - DEPLOYMENT_KEY
+          - DATABASE_PASSWORD
+
+mcp:
+  enabled: true
+  polytomic:
+    publicOrigin: "https://mcp.polytomic.test"
+  secrets:
+    external:
+      entries:
+        - name: polytomic-mcp-secrets
+          source:
+            type: asm
+            path: ci/polytomic-mcp
+          data:
+            - POLYTOMIC_APPROVAL_SECRET
+  ingress:
+    enabled: true
+    hosts:
+      - host: mcp.polytomic.test
+        paths:
+          - path: /
+            pathType: Prefix
+  networkPolicy:
+    enabled: true

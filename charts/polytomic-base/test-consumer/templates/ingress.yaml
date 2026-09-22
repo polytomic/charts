@@ -1,0 +1,1 @@
+{{- include "polytomic-base.ingress" (dict "root" . "values" .Values "name" "") }}

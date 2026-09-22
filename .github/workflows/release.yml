@@ -1,0 +1,65 @@
+name: Release
+
+# A tag named <chart>-<version> publishes that chart at that version:
+#   polytomic-2.0.0, polytomic-base-1.0.0
+
+on:
+  push:
+    tags:
+      - "polytomic-[0-9]*"
+      - "polytomic-base-[0-9]*"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  HELM_VERSION: v4.2.4
+  REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Resolve chart from tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            polytomic-base-*) name=polytomic-base; version="${tag#polytomic-base-}" ;;
+            polytomic-*)      name=polytomic;      version="${tag#polytomic-}" ;;
+            *) echo "::error::unrecognised tag $tag"; exit 1 ;;
+          esac
+          declared=$(awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}' "charts/$name/Chart.yaml")
+          if [[ "$declared" != "$version" ]]; then
+            echo "::error::tag $tag names version $version but charts/$name/Chart.yaml declares $declared"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install plugins
+        run: make tools
+
+      - name: Dependencies
+        run: make deps
+
+      - name: Lint and test
+        run: make lint test
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push
+        run: |
+          set -euo pipefail
+          out=$(mktemp -d)
+          helm package "charts/${{ steps.tag.outputs.name }}" --destination "$out"
+          helm push "$out"/*.tgz "$REGISTRY"

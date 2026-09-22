@@ -1,0 +1,9 @@
+apiVersion: v2
+name: test-consumer
+description: Unpublished consumer of polytomic-base used to unit-test the library
+type: application
+version: 0.0.0
+dependencies:
+  - name: polytomic-base
+    version: 1.0.0
+    repository: "file://.."

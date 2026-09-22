@@ -1,0 +1,13 @@
+{{- if .Values.sidecar.enabled -}}
+{{- $ctx := dict "root" . "values" .Values.sidecar "name" "sidecar" -}}
+{{- include "polytomic-base.configmap" $ctx }}
+{{- include "polytomic-base.deployment" $ctx }}
+{{- include "polytomic-base.service" $ctx }}
+---
+{{ include "polytomic-base.serviceaccount" $ctx }}
+{{- if .Values.sidecar.networkPolicy.enabled }}
+---
+{{ include "polytomic-base.networkpolicy" $ctx }}
+{{- end }}
+{{- include "polytomic-base.externalsecret" $ctx }}
+{{- end }}

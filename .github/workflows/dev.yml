@@ -1,0 +1,48 @@
+name: Dev build
+
+# Every push to main publishes both charts as prereleases,
+# <Chart.yaml version>-<short sha>, so a build can be pinned in a staging
+# environment before it is tagged. Main always holds the next release
+# version, so `helm install --version X.Y.Z` never selects a dev build.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  HELM_VERSION: v4.2.4
+  REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Dependencies
+        run: make deps
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --short=8 HEAD)
+          out=$(mktemp -d)
+          for chart in charts/polytomic-base charts/polytomic; do
+            version=$(awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$chart/Chart.yaml")
+            helm package "$chart" --destination "$out" --version "$version-$sha"
+          done
+          for tgz in "$out"/*.tgz; do
+            helm push "$tgz" "$REGISTRY"
+          done

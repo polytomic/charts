@@ -1,0 +1,82 @@
+suite: networkpolicy
+templates:
+  - templates/networkpolicy.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+  networkPolicy.enabled: true
+
+tests:
+  - it: renders nothing when disabled
+    set:
+      <<: *valid
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: selects the component's pods by name and instance
+    release:
+      name: rel
+    set: *valid
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: test-consumer
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/instance"]
+          value: rel
+
+  - it: derives ingress ports from enabled services
+    set: *valid
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 5200
+
+  - it: adds a CIDR ingress rule per ingressCidrs entry
+    set:
+      <<: *valid
+      networkPolicy.ingressCidrs:
+        - 10.0.0.0/8
+    asserts:
+      - equal:
+          path: spec.ingress[1].from[0].ipBlock.cidr
+          value: 10.0.0.0/8
+
+  - it: allows DNS on UDP and TCP
+    set: *valid
+    asserts:
+      - equal:
+          path: spec.egress[0].ports[0].protocol
+          value: UDP
+      - equal:
+          path: spec.egress[0].ports[1].protocol
+          value: TCP
+
+  - it: appends freeform egress then consumer extraEgress
+    set:
+      <<: *valid
+      networkPolicy.egress:
+        - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+      extraEgress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app: db
+          ports:
+            - protocol: TCP
+              port: 5432
+    asserts:
+      - equal:
+          path: spec.egress[2].to[0].ipBlock.cidr
+          value: 0.0.0.0/0
+      - equal:
+          path: spec.egress[3].to[0].podSelector.matchLabels.app
+          value: db
+      - equal:
+          path: spec.egress[3].ports[0].port
+          value: 5432

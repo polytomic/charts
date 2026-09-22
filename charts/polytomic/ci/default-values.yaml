@@ -1,0 +1,45 @@
+# External database and Redis, existing secret, static CSI volume.
+image:
+  tag: "0.0.0-test"
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+database:
+  host: "postgres.example.com"
+
+externalRedis:
+  host: "redis.example.com"
+  tls: true
+  auth: true
+
+operationalBucket:
+  provider: s3
+  name: ci-operational
+  region: us-east-1
+
+sharedVolume:
+  mode: static
+  static:
+    driver: efs.csi.aws.com
+    volumeHandle: "fs-00000000"
+
+secrets:
+  existing:
+    - name: ci-placeholder-secrets
+
+runner:
+  nodeSelectors:
+    workload: sync
+  tolerations:
+    - key: dedicated
+      value: sync-jobs
+      effect: NoSchedule
+    - key: gpu
+      effect: NoSchedule
+  executors:
+    bulk:
+      memoryMaximum: 8192
+      tags: "team=data"

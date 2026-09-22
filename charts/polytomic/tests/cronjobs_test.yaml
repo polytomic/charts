@@ -1,0 +1,66 @@
+suite: cronjobs
+templates:
+  - templates/cronjobs.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: ut-secrets
+
+tests:
+  - it: renders no CronJobs by default
+    set: *valid
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an enabled summary job with the shared volume and secret sources
+    release:
+      name: rel
+    set:
+      <<: *valid
+      cronjobs.jobs.weeklySummary.enabled: true
+      sharedVolume.subPath: sub
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-weekly-summary
+      - equal:
+          path: spec.schedule
+          value: "0 15 * * MON"
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args[0]
+          value: "./vector & ./ptctl sync summary -w --report-errors"
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: polytomic-data
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts[0].subPath
+          value: sub
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: ut-secrets
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].env
+          content:
+            name: SERVICE
+            value: app
+
+  - it: uses an emptyDir in emptyDir mode
+    set:
+      <<: *valid
+      cronjobs.jobs.dailySummary.enabled: true
+      sharedVolume.mode: emptyDir
+    asserts:
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.volumes[0].emptyDir
+          value: {}

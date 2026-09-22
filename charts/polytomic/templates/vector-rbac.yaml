@@ -1,0 +1,47 @@
+{{- if .Values.vector.daemonset.enabled }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- $sa := .Values.vector.daemonset.serviceAccount -}}
+{{- if $sa.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "polytomic.vectorServiceAccountName" $ctx }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: vector
+  {{- with $sa.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+# kubernetes_logs needs cluster-wide pod, namespace and node metadata.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-vector
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: vector
+rules:
+- apiGroups: [""]
+  resources: [pods, namespaces, nodes]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-vector
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: vector
+subjects:
+- kind: ServiceAccount
+  name: {{ include "polytomic.vectorServiceAccountName" $ctx }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "polytomic-base.fullname" $ctx }}-vector
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

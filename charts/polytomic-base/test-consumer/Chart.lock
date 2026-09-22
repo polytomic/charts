@@ -1,0 +1,6 @@
+dependencies:
+- name: polytomic-base
+  repository: file://..
+  version: 1.0.0
+digest: sha256:69c39ec302ae076d5f7b2dd042494592e321a61704d39240e7ff28d7ee35a98c
+generated: "2026-09-22T11:07:28.893186-07:00"

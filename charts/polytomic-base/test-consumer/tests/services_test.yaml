@@ -1,0 +1,114 @@
+suite: service, hpa, pdb, ingress
+templates:
+  - templates/service.yaml
+  - templates/hpa.yaml
+  - templates/pdb.yaml
+  - templates/ingress.yaml
+
+set: &valid
+  secrets.existing:
+    - name: ut-secret
+
+tests:
+  - it: renders a NodePort service with nodePort and externalTrafficPolicy
+    set:
+      <<: *valid
+      services.http.service.type: NodePort
+      services.http.service.nodePort: 30080
+      services.http.service.externalTrafficPolicy: Local
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].nodePort
+          value: 30080
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+
+  - it: omits externalTrafficPolicy for ClusterIP
+    set:
+      <<: *valid
+      services.http.service.externalTrafficPolicy: Local
+    template: templates/service.yaml
+    asserts:
+      - notExists:
+          path: spec.externalTrafficPolicy
+
+  - it: renders an HPA with behavior
+    set:
+      <<: *valid
+      services.http.autoscaling.enabled: true
+      services.http.autoscaling.behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+    template: templates/hpa.yaml
+    asserts:
+      - equal:
+          path: spec.behavior.scaleDown.stabilizationWindowSeconds
+          value: 300
+
+  - it: renders a PDB with maxUnavailable
+    set:
+      <<: *valid
+      services.http.podDisruptionBudget.enabled: true
+      services.http.podDisruptionBudget.maxUnavailable: 1
+    template: templates/pdb.yaml
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+
+  - it: renders an ingress with className and path routing to a named service and port
+    release:
+      name: rel
+    set:
+      <<: *valid
+      ingress.enabled: true
+      ingress.className: alb
+      ingress.hosts:
+        - host: a.example.com
+          paths:
+            - path: /
+              service: http
+              port: 5200
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: alb
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: rel-test-consumer-http
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 5200
+
+  - it: defaults ingress backend to the first enabled service with a port
+    set:
+      <<: *valid
+      ingress.enabled: true
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 5200
+
+  - it: supports flat and nested tls shapes
+    set:
+      <<: *valid
+      ingress.enabled: true
+      ingress.tls:
+        - secretName: nested
+          hosts:
+            - a.example.com
+        - secretName: flat
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: a.example.com
+      - equal:
+          path: spec.tls[1].secretName
+          value: flat

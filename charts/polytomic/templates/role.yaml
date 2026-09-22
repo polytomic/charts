@@ -1,0 +1,19 @@
+{{- if .Values.serviceAccount.create -}}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+rules:
+  # Watch spawned task pods
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  # Create and manage per-task Jobs
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+{{- end }}

@@ -1,0 +1,26 @@
+{{- if .Values.datadog.daemonset.enabled }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-datadog
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: datadog
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "polytomic-base.name" $ctx }}-datadog
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  # Routes traffic only to the agent on the same node
+  internalTrafficPolicy: Local
+  ports:
+  - name: apm
+    port: 8126
+    targetPort: 8126
+    protocol: TCP
+  - name: dogstatsd
+    port: 8125
+    targetPort: 8125
+    protocol: UDP
+{{- end }}

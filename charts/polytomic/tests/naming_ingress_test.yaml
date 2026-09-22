@@ -1,0 +1,258 @@
+suite: naming, ingress and network policy
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/service.yaml
+  - templates/ingress.yaml
+  - templates/networkpolicy.yaml
+  - templates/externalsecret.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: ut-secrets
+
+tests:
+  - it: names resources <release>-polytomic-<role> and labels the app pods polytomic
+    release:
+      name: rel
+    set: *valid
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: app
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-app
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: polytomic
+
+  - it: honors fullnameOverride everywhere the name is derived
+    release:
+      name: rel
+    set:
+      <<: *valid
+      fullnameOverride: pt
+    asserts:
+      - equal:
+          path: metadata.name
+          value: pt-config
+        template: templates/configmap.yaml
+      - equal:
+          path: data.KUBERNETES_CONFIGMAP
+          value: pt-config
+        template: templates/configmap.yaml
+      - equal:
+          path: data.KUBERNETES_SERVICE_ACCOUNT
+          value: pt
+        template: templates/configmap.yaml
+      - equal:
+          path: metadata.name
+          value: pt-app
+        template: templates/service.yaml
+
+  - it: honors nameOverride in labels
+    release:
+      name: rel
+    set:
+      <<: *valid
+      nameOverride: custom
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rel-custom-app
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: custom
+
+  - it: ingress is off by default
+    set: *valid
+    template: templates/ingress.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ingress applies className and routes to the app Service
+    release:
+      name: rel
+    set:
+      <<: *valid
+      ingress.enabled: true
+      ingress.className: nginx
+      ingress.hosts:
+        - host: polytomic.test
+          paths:
+            - path: /
+              pathType: Prefix
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: polytomic.test
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: rel-polytomic-app
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 5100
+
+  - it: ingress routes each path to its named service and port
+    release:
+      name: rel
+    set:
+      <<: *valid
+      ingress.enabled: true
+      ingress.hosts:
+        - host: polytomic.test
+          paths:
+            - path: /
+              service: app
+              port: 5100
+            - path: /metrics
+              service: app
+              port: 8080
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /metrics
+      - equal:
+          path: spec.rules[0].http.paths[1].backend.service.name
+          value: rel-polytomic-app
+      - equal:
+          path: spec.rules[0].http.paths[1].backend.service.port.number
+          value: 8080
+
+  - it: ingress prefers app over an alphabetically earlier service with a port
+    release:
+      name: rel
+    set:
+      <<: *valid
+      ingress.enabled: true
+      services.aaa:
+        enabled: true
+        replicas: 1
+        resources: {}
+        env: {}
+        service:
+          type: ClusterIP
+          port: 1111
+          targetPort: 1111
+    template: templates/ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: rel-polytomic-app
+
+  - it: network policy is off by default
+    set: *valid
+    template: templates/networkpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: network policy allows ingress on 5100 and freeform egress with no bundled rules
+    set:
+      <<: *valid
+      networkPolicy.enabled: true
+      networkPolicy.ingressCidrs:
+        - 10.0.0.0/16
+      networkPolicy.egress:
+        - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+    template: templates/networkpolicy.yaml
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 5100
+      - equal:
+          path: spec.ingress[1].from[0].ipBlock.cidr
+          value: 10.0.0.0/16
+      - equal:
+          path: spec.egress[2].to[0].ipBlock.cidr
+          value: 0.0.0.0/0
+      - lengthEqual:
+          path: spec.egress
+          count: 3
+
+  - it: renders no ExternalSecrets without entries
+    set: *valid
+    template: templates/externalsecret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders one ExternalSecret per entry with mapped keys and refresh intervals
+    set:
+      <<: *valid
+      secrets.external.apiVersion: external-secrets.io/v1beta1
+      secrets.external.defaults.refreshInterval: 2h
+      secrets.external.entries:
+        - name: pt-eso
+          source: { type: gcpsm, path: polytomic }
+          data:
+            - DEPLOYMENT_KEY
+            - k8sKey: GOOGLE_CLIENT_SECRET
+              remoteKey: google_oauth_secret
+        - name: pt-keys
+          refreshInterval: 15m
+          source: { type: asm, path: polytomic/keys }
+          data: [TOKEN_SIGNING_KEYS]
+    template: templates/externalsecret.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: apiVersion
+          value: external-secrets.io/v1beta1
+        documentIndex: 0
+      - equal:
+          path: spec.secretStoreRef.name
+          value: gcp-secret-manager
+        documentIndex: 0
+      - equal:
+          path: spec.target.name
+          value: pt-eso
+        documentIndex: 0
+      - equal:
+          path: spec.refreshInterval
+          value: 2h
+        documentIndex: 0
+      - contains:
+          path: spec.data
+          content:
+            secretKey: DEPLOYMENT_KEY
+            remoteRef:
+              key: polytomic
+              property: DEPLOYMENT_KEY
+        documentIndex: 0
+      - contains:
+          path: spec.data
+          content:
+            secretKey: GOOGLE_CLIENT_SECRET
+            remoteRef:
+              key: polytomic
+              property: google_oauth_secret
+        documentIndex: 0
+      - equal:
+          path: spec.secretStoreRef.name
+          value: aws-secrets-manager
+        documentIndex: 1
+      - equal:
+          path: spec.refreshInterval
+          value: 15m
+        documentIndex: 1

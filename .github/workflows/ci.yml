@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  HELM_VERSION: v4.2.4
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install plugins
+        run: make tools
+
+      - name: Dependencies
+        run: make deps
+
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: make test
+
+      - name: Render fixtures
+        run: |
+          shopt -s nullglob
+          for f in charts/polytomic/ci/*-values.yaml; do
+            echo "== $f"
+            helm template ci-render charts/polytomic -f "$f" >/dev/null
+          done
+
+  version:
+    # Every chart touched by a PR must bump its version, log the change, and
+    # not reuse a version already published to GHCR.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Check chart versions
+        env:
+          BASE: ${{ github.base_ref }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE"
+
+          parse_version() {
+            awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}'
+          }
+          # main only ever carries plain X.Y.Z releases; dev builds get their
+          # prerelease suffix at package time, so a suffix here is a mistake.
+          require_release_version() {
+            if ! [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::$2 version $1 must be a plain X.Y.Z release version."
+              exit 1
+            fi
+          }
+
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+          lib_bumped=0
+          for chart in charts/polytomic-base charts/polytomic; do
+            name=$(basename "$chart")
+            # Only charts with changes on this branch are checked.
+            if git diff --quiet "origin/$BASE"...HEAD -- "$chart"; then
+              echo "$name: unchanged"
+              continue
+            fi
+            file="$chart/Chart.yaml"
+            current=$(parse_version < "$file")
+            require_release_version "$current" "$name"
+            if git cat-file -e "origin/$BASE:$file" 2>/dev/null; then
+              base=$(git show "origin/$BASE:$file" | parse_version)
+              if [[ "$current" == "$base" ]]; then
+                echo "::error::$name version is unchanged ($current). Bump version: in $file."
+                exit 1
+              fi
+              if [[ "$(printf '%s\n%s\n' "$base" "$current" | sort -V | tail -n1)" != "$current" ]]; then
+                echo "::error::$name version $current is not greater than $BASE ($base)."
+                exit 1
+              fi
+            fi
+            if ! grep -qF "## [$current]" "$chart/CHANGELOG.md"; then
+              echo "::error::$chart/CHANGELOG.md has no entry for $current."
+              exit 1
+            fi
+            if helm show chart "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/$name" --version "$current" >/dev/null 2>&1; then
+              echo "::error::$name $current is already published; pick a new version."
+              exit 1
+            fi
+            echo "$name: $current ok"
+            [[ "$name" == "polytomic-base" ]] && lib_bumped=1
+          done
+
+          if [[ "$lib_bumped" == 1 ]]; then
+            lib_version=$(parse_version < charts/polytomic-base/Chart.yaml)
+            pinned=$(awk '/name: polytomic-base/{f=1} f && /version:/{gsub(/["'\'']/, "", $2); print $2; exit}' charts/polytomic/Chart.yaml)
+            if [[ "$pinned" != "$lib_version" ]]; then
+              echo "::error::charts/polytomic pins polytomic-base $pinned but the lib is $lib_version."
+              exit 1
+            fi
+            locked=$(awk '/name: polytomic-base/{f=1} f && /version:/{print $2; exit}' charts/polytomic/Chart.lock)
+            if [[ "$locked" != "$lib_version" ]]; then
+              echo "::error::charts/polytomic/Chart.lock records polytomic-base $locked; run helm dependency update charts/polytomic."
+              exit 1
+            fi
+          fi

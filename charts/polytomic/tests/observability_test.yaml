@@ -1,0 +1,278 @@
+suite: observability
+templates:
+  - templates/deployment.yaml
+  - templates/mcp/deployment.yaml
+  - templates/cronjobs.yaml
+  - templates/vector-daemonset.yaml
+  - templates/vector-configmap.yaml
+  - templates/vector-rbac.yaml
+  - templates/datadog-daemonset.yaml
+  - templates/datadog-service.yaml
+  - templates/datadog-rbac.yaml
+
+set: &valid
+  image.tag: "0.0.0-test"
+  image.registry: "reg.example.com"
+  polytomicDeploymentId: "ut-deployment"
+  auth.url: "https://polytomic.test"
+  database.host: "postgres.example.com"
+  externalRedis.host: "redis.example.com"
+  operationalBucket.name: "ut-bucket"
+  operationalBucket.region: "us-west-2"
+  sharedVolume.mode: "dynamic"
+  secrets.existing:
+    - name: ut-secrets
+  mcp.enabled: true
+  cronjobs.jobs.dailySummary.enabled: true
+
+tests:
+  - it: renders no observability resources or labels when everything is off
+    set: *valid
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/vector-daemonset.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/vector-configmap.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/vector-rbac.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/datadog-daemonset.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/datadog-service.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/datadog-rbac.yaml
+      - notExists:
+          path: spec.template.metadata.labels["vector.dev/include"]
+        template: templates/deployment.yaml
+      - notExists:
+          path: spec.template.metadata.labels["vector.dev/include"]
+        template: templates/mcp/deployment.yaml
+      - notExists:
+          path: spec.jobTemplate.spec.template.metadata.labels["vector.dev/include"]
+        template: templates/cronjobs.yaml
+
+  - it: labels app, MCP and CronJob pods when the Vector DaemonSet is on
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+        template: templates/deployment.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+        template: templates/deployment.yaml
+        documentIndex: 3
+      - equal:
+          path: spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+        template: templates/deployment.yaml
+        documentIndex: 6
+      - equal:
+          path: spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+        template: templates/mcp/deployment.yaml
+      - equal:
+          path: spec.jobTemplate.spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+        template: templates/cronjobs.yaml
+
+  - it: keeps user podLabels alongside the Vector label and overrides a per-service opt-out
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      services.defaults.podLabels:
+        team: data
+      services.app.podLabels:
+        vector.dev/include: "false"
+    template: templates/deployment.yaml
+    documentSelector:
+      path: metadata.labels["app.kubernetes.io/component"]
+      value: app
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: data
+      - equal:
+          path: spec.template.metadata.labels["vector.dev/include"]
+          value: "true"
+
+  - it: renders the Vector DaemonSet with inherited image, bucket env and its own secrets
+    release:
+      name: rel
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.managedLogs: true
+      vector.daemonset.secrets.existing:
+        - name: deployment-key
+    template: templates/vector-daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: reg.example.com/polytomic-vector:0.0.0-test
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: rel-polytomic-vector
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXECUTION_LOG_BUCKET
+            value: ut-bucket
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            value: us-west-2
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SEND_LOGS
+            value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="DEPLOYMENT")].valueFrom.configMapKeyRef.name
+          value: rel-polytomic-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: deployment-key
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: ut-secrets
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="var-lib-vector")].hostPath.path
+          value: /var/lib/vector
+
+  - it: Vector and Datadog image tag and registry can be overridden
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.daemonset.image.tag: "v1"
+      vector.daemonset.image.registry: mirror.example.com
+      datadog.daemonset.enabled: true
+      datadog.daemonset.image.tag: "dd1"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mirror.example.com/polytomic-vector:v1
+        template: templates/vector-daemonset.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: reg.example.com/polytomic-dd-agent:dd1
+        template: templates/datadog-daemonset.yaml
+
+  - it: Vector uses an emptyDir data dir when configured and drops AWS_REGION for gcs
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.daemonset.dataDir.type: emptyDir
+      operationalBucket.provider: gcs
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="var-lib-vector")].emptyDir
+          value: {}
+        template: templates/vector-daemonset.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            value: us-west-2
+        template: templates/vector-daemonset.yaml
+      - matchRegex:
+          path: data["vector.toml"]
+          pattern: gcp_cloud_storage
+        template: templates/vector-configmap.yaml
+      - notMatchRegex:
+          path: data["vector.toml"]
+          pattern: datadog_logs
+        template: templates/vector-configmap.yaml
+
+  - it: Vector config adds the Datadog sink only with managedLogs
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.managedLogs: true
+    template: templates/vector-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["vector.toml"]
+          pattern: aws_s3
+      - matchRegex:
+          path: data["vector.toml"]
+          pattern: datadog_logs
+
+  - it: Vector ServiceAccount carries annotations and can be brought by name
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.daemonset.serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::1:role/vector
+    template: templates/vector-rbac.yaml
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.annotations["eks.amazonaws.com/role-arn"]
+          value: arn:aws:iam::1:role/vector
+
+  - it: Vector with an existing ServiceAccount renders no ServiceAccount and requires a name
+    set:
+      <<: *valid
+      vector.daemonset.enabled: true
+      vector.daemonset.serviceAccount.create: false
+      vector.daemonset.serviceAccount.name: shared-sa
+    asserts:
+      - hasDocuments:
+          count: 2
+        template: templates/vector-rbac.yaml
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: shared-sa
+        template: templates/vector-daemonset.yaml
+
+  - it: renders the Datadog agent with inherited image, DEPLOYMENT from the ConfigMap and its own secrets
+    release:
+      name: rel
+    set:
+      <<: *valid
+      datadog.daemonset.enabled: true
+      datadog.daemonset.secrets.existing:
+        - name: deployment-key
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: reg.example.com/polytomic-dd-agent:0.0.0-test
+        template: templates/datadog-daemonset.yaml
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="DD_ENV")].valueFrom.configMapKeyRef.name
+          value: rel-polytomic-config
+        template: templates/datadog-daemonset.yaml
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: deployment-key
+        template: templates/datadog-daemonset.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DD_CONTAINER_INCLUDE
+            value: kube_namespace:NAMESPACE
+        template: templates/datadog-daemonset.yaml
+      - equal:
+          path: spec.internalTrafficPolicy
+          value: Local
+        template: templates/datadog-service.yaml
+      - equal:
+          path: metadata.name
+          value: rel-polytomic-datadog
+        template: templates/datadog-service.yaml

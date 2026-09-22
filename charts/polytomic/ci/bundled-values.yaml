@@ -1,0 +1,35 @@
+# Trial install: bundled Postgres, Redis and NFS provisioner, dynamic volume.
+image:
+  tag: "0.0.0-test"
+
+polytomicDeploymentId: "ci-test"
+
+auth:
+  url: "https://polytomic.test"
+
+operationalBucket:
+  provider: s3
+  name: ci-operational
+  region: us-east-1
+
+sharedVolume:
+  mode: dynamic
+  dynamic:
+    storageClassName: nfs
+
+secrets:
+  existing:
+    - name: polytomic-secrets
+
+postgresql:
+  enabled: true
+  auth:
+    existingSecret: polytomic-secrets
+
+redis:
+  enabled: true
+  auth:
+    existingSecret: polytomic-secrets
+
+nfs-server-provisioner:
+  enabled: true

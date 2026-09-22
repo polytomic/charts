@@ -1,0 +1,25 @@
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+Polytomic {{ .Chart.Version }} is installed as release {{ .Release.Name }}.
+
+Database: {{ if .Values.postgresql.enabled }}bundled ({{ include "polytomic.databaseHost" $ctx }}){{ else }}{{ include "polytomic.databaseHost" $ctx }}:{{ include "polytomic.databasePort" $ctx }}{{ end }}
+Redis:    {{ if .Values.redis.enabled }}bundled ({{ include "polytomic.redisHost" $ctx }}){{ else }}{{ include "polytomic.redisHost" $ctx }}:{{ include "polytomic.redisPort" $ctx }}{{ end }}
+Storage:  sharedVolume.mode={{ .Values.sharedVolume.mode }}
+MCP:      {{ if .Values.mcp.enabled }}enabled{{ else }}disabled{{ end }}
+
+{{- if .Values.ingress.enabled }}
+
+Reach the app through the ingress:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+No ingress is enabled. Port-forward the app Service:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "polytomic-base.fullname" $ctx }}-app 8080:{{ .Values.services.app.service.port }}
+  open http://127.0.0.1:8080
+{{- end }}
+
+Pods:
+  kubectl get pods --namespace {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Docs: https://docs.polytomic.com

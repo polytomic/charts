@@ -1,0 +1,132 @@
+{{- if .Values.datadog.daemonset.enabled }}
+{{- $ctx := dict "root" . "values" .Values "name" "" -}}
+{{- $dd := .Values.datadog.daemonset -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "polytomic-base.fullname" $ctx }}-datadog
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "polytomic-base.labels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: datadog
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "polytomic-base.name" $ctx }}-datadog
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "polytomic-base.name" $ctx }}-datadog
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "polytomic-base.fullname" $ctx }}-datadog
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: datadog-agent
+        image: {{ include "polytomic.datadogImage" $ctx }}
+        imagePullPolicy: {{ $dd.imagePullPolicy }}
+        ports:
+        - containerPort: 8126
+          name: apm
+          protocol: TCP
+        - containerPort: 8125
+          name: dogstatsd
+          protocol: UDP
+        env:
+        # The API key is decrypted by ptctl from DEPLOYMENT / DEPLOYMENT_KEY.
+        - name: DD_API_KEY
+          value: "ENC[DD_API_KEY]"
+        - name: DD_SECRET_BACKEND_COMMAND
+          value: "/bin/ptctl"
+        - name: DD_SECRET_BACKEND_ARGUMENTS
+          value: "config get -f vector -"
+        - name: DD_APM_ENABLED
+          value: "true"
+        - name: DD_APM_NON_LOCAL_TRAFFIC
+          value: "true"
+        - name: DD_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "polytomic-base.configmapName" $ctx }}
+              key: DEPLOYMENT
+        - name: DD_KUBERNETES_KUBELET_NODENAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: DD_HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: DD_KUBERNETES_POD_LABELS_AS_TAGS
+          value: '{"app.kubernetes.io/name": "kube_app", "app.kubernetes.io/component": "kube_component", "polytomic.com/type": "polytomic_type", "polytomic.com/sync-id": "polytomic_sync_id", "polytomic.com/execution-id": "polytomic_execution_id"}'
+        - name: DD_SYSTEM_PROBE_ENABLED
+          value: "false"
+        {{- if $dd.containerMetrics.enabled }}
+        - name: DD_KUBELET_TLS_VERIFY
+          value: "false"
+        - name: DD_KUBERNETES_KUBELET_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        {{- end }}
+        {{- if $dd.processAgent.enabled }}
+        - name: DD_PROCESS_AGENT_ENABLED
+          value: "true"
+        - name: DD_CONTAINER_COLLECT_ALL
+          value: "true"
+        {{- end }}
+        - name: DD_CONTAINER_INCLUDE
+          value: {{ $dd.includeContainers | default (printf "kube_namespace:%s" .Release.Namespace) | quote }}
+        {{- if $dd.excludeContainers }}
+        - name: DD_CONTAINER_EXCLUDE
+          value: {{ $dd.excludeContainers | quote }}
+        {{- end }}
+        - name: DEPLOYMENT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "polytomic-base.configmapName" $ctx }}
+              key: DEPLOYMENT
+        {{- with $dd.secrets.existing }}
+        envFrom:
+        {{- range . }}
+        - secretRef:
+            name: {{ .name }}
+        {{- end }}
+        {{- end }}
+        {{- if $dd.containerMetrics.enabled }}
+        volumeMounts:
+        - name: cgroups
+          mountPath: /host/sys/fs/cgroup
+          readOnly: true
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        {{- end }}
+        resources:
+          {{- toYaml $dd.resources | nindent 10 }}
+      {{- if $dd.containerMetrics.enabled }}
+      volumes:
+      - name: cgroups
+        hostPath:
+          path: /sys/fs/cgroup
+      - name: proc
+        hostPath:
+          path: /proc
+      {{- end }}
+      {{- with $dd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $dd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $dd.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
