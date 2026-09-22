@@ -9,8 +9,8 @@ Guidance for AI coding assistants working in this repository.
 - `charts/polytomic`: the application chart. `templates/*.yaml` are one-line wrappers that
   call the lib; `templates/mcp/*.yaml` call the same lib templates for the MCP component;
   `templates/_helpers.tpl` holds everything chart-specific.
-- `.github/workflows`: `ci.yml` (lint, tests, version checks), `dev.yml` (prerelease on push
-  to main), `release.yml` (publish on tag), `prune.yml` (weekly prerelease cleanup).
+- `.github/workflows`: `ci.yml` (lint, tests, version checks; prerelease on green push to
+  main), `release.yml` (publish on tag), `prune.yml` (weekly prerelease cleanup).
 
 ## The lib contract
 

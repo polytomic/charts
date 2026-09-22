@@ -42,10 +42,10 @@ the *next* release version.
    to its `CHANGELOG.md`. CI checks that the version is higher than `main`, is not already
    published, has a changelog entry, and (for the lib) that `charts/polytomic` pins the same
    lib version with an updated `Chart.lock`.
-2. Merge. Every push to `main` publishes both charts as a prerelease,
-   `<version>-<short sha>`, which you can pin to try a build before releasing:
+2. Merge. Every push to `main` that passes lint and tests publishes both charts as a
+   prerelease, `<version>-<short sha>`, which you can pin to try a build before releasing:
    `--version 2.0.1-abc12345`. `helm install --version 2.0.1` never selects a prerelease.
-   The same build can be rerun from the Actions tab (`Dev build`, run workflow).
+   The same build can be rerun from the Actions tab (`CI`, run workflow, on `main`).
 3. Tag the release: `polytomic-2.0.1` or `polytomic-base-1.0.1`. The tag workflow checks the
    tag matches `Chart.yaml`, runs lint and tests, and pushes that version to GHCR.
 
