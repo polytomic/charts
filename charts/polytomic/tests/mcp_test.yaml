@@ -93,6 +93,9 @@ tests:
       - equal:
           path: data.POLYTOMIC_HTTP_PORT
           value: "3000"
+      - equal:
+          path: data.POLYTOMIC_MCP_REDIS_URL
+          value: redis://redis.example.com:6379
       - notExists:
           path: data.POLYTOMIC_MCP_PUBLIC_ORIGIN
 
@@ -113,6 +116,36 @@ tests:
       - equal:
           path: data.POLYTOMIC_MCP_PUBLIC_ORIGIN
           value: https://mcp.polytomic.test
+
+  - it: computes the Redis URL from externalRedis with TLS and auth
+    set:
+      <<: *valid
+      externalRedis.tls: true
+      externalRedis.auth: true
+    template: templates/mcp/configmap.yaml
+    asserts:
+      - equal:
+          path: data.POLYTOMIC_MCP_REDIS_URL
+          value: rediss://:${REDIS_PASSWORD}@redis.example.com:6379
+
+  - it: requires the bundled Redis secret among the MCP secret sources
+    set:
+      <<: *valid
+      redis.enabled: true
+      redis.auth.existingSecret: ut-secrets
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: redis.auth.existingSecret "ut-secrets" must also be listed in mcp.secrets
+
+  - it: rejects POLYTOMIC_MCP_REDIS_URL in mcp.config
+    set:
+      <<: *valid
+      mcp.config.POLYTOMIC_MCP_REDIS_URL: "x"
+    template: templates/mcp/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: config.POLYTOMIC_MCP_REDIS_URL is a reserved key
 
   - it: keeps the app's config out of the MCP ConfigMap
     set:

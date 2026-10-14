@@ -429,7 +429,7 @@ MCP component: consumer helpers dispatched by polytomic-base as polytomic.mcp.*
 --------------------------------------------------------------------- */}}
 
 {{- define "polytomic.mcp.reservedConfigKeys" -}}
-POLYTOMIC_BASE_URL POLYTOMIC_API_VERSION POLYTOMIC_HTTP_HOST POLYTOMIC_HTTP_PORT POLYTOMIC_AUTH_SERVER_URL POLYTOMIC_MCP_PUBLIC_ORIGIN POLYTOMIC_APPROVAL_SECRET MODEM_PUBLIC_KEY
+POLYTOMIC_BASE_URL POLYTOMIC_API_VERSION POLYTOMIC_HTTP_HOST POLYTOMIC_HTTP_PORT POLYTOMIC_AUTH_SERVER_URL POLYTOMIC_MCP_PUBLIC_ORIGIN POLYTOMIC_MCP_REDIS_URL POLYTOMIC_APPROVAL_SECRET MODEM_PUBLIC_KEY
 {{- end }}
 
 {{/*
@@ -444,7 +444,12 @@ In-cluster URL of the app Service, for MCP's default base URL.
 {{- $m := .root.Values.mcp -}}
 {{- if not $m.polytomic.apiVersion }}{{ fail "mcp.polytomic.apiVersion is required" }}{{ end -}}
 {{- if not .root.Values.auth.url }}{{ fail "auth.url is required" }}{{ end -}}
+{{- if .root.Values.redis.enabled -}}
+{{- $es := .root.Values.redis.auth.existingSecret -}}
+{{- if not (has $es (splitList " " (include "polytomic.secretSourceNames" .))) }}{{ fail (printf "redis.auth.existingSecret %q must also be listed in mcp.secrets.existing or mcp.secrets.external.entries" $es) }}{{ end -}}
+{{- end -}}
 POLYTOMIC_BASE_URL: {{ $m.polytomic.baseUrl | default (include "polytomic.appServiceUrl" .) | quote }}
+POLYTOMIC_MCP_REDIS_URL: {{ include "polytomic.redisUrl" . | quote }}
 POLYTOMIC_API_VERSION: {{ $m.polytomic.apiVersion | quote }}
 POLYTOMIC_HTTP_HOST: "0.0.0.0"
 POLYTOMIC_HTTP_PORT: {{ $m.services.http.service.targetPort | quote }}
