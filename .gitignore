@@ -1,3 +1,5 @@
 charts/*/charts/*.tgz
 charts/*/test-consumer/charts/*.tgz
 *.tgz
+bin/
+build/

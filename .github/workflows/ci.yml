@@ -2,9 +2,17 @@ name: CI
 
 on:
   pull_request:
+    # labeled/unlabeled so toggling a release:<chart> label re-runs the checks.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   workflow_dispatch:
+
+# A newer push to a PR cancels the older run so the report comment always
+# reflects the latest commit. Pushes to main are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -17,15 +25,18 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Install plugins
-        run: make tools
+      - name: Install plugins and scanners
+        run: make tools check-tools
 
       - name: Dependencies
         run: make deps
@@ -36,103 +47,160 @@ jobs:
       - name: Unit tests
         run: make test
 
-      - name: Render fixtures
-        run: |
-          shopt -s nullglob
-          for f in charts/polytomic/ci/*-values.yaml; do
-            echo "== $f"
-            helm template ci-render charts/polytomic -f "$f" >/dev/null
-          done
+      - name: Render fixtures and validate against Kubernetes schemas
+        run: make kubeconform
 
-  version:
-    # Every chart touched by a PR must bump its version, log the change, and
-    # not reuse a version already published to GHCR.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
+      - name: Check values.schema.json is current
+        run: make schema-check
+
+      - name: kubeconform report
+        if: always()
+        run: make kubeconform-report
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
-          fetch-depth: 0
+          name: report-kubeconform
+          path: build/report/kubeconform.md
 
-      - uses: azure/setup-helm@v5
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: zizmor and actionlint
+        run: make check-tools workflow-lint
+
+  scan:
+    # Report only: findings land in the Security tab and never fail the build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Check chart versions
+      - name: Trivy misconfiguration scan
+        run: make tools check-tools deps trivy
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: trivy-sarif
+          path: build/trivy.sarif
+
+      - name: Trivy report
+        if: always()
+        run: make trivy-report
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: report-trivy
+          path: build/report/trivy.md
+
+      # Fork PR tokens cannot write security events.
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: build/trivy.sarif
+          category: trivy
+
+  report:
+    # One PR comment, updated in place, with the kubeconform and Trivy
+    # summaries. Fork PR tokens cannot comment.
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [test, scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: report-*
+          merge-multiple: true
+          path: build/report
+
+      - name: Post comment
         env:
-          BASE: ${{ github.base_ref }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SERVER: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$BASE"
-
-          parse_version() {
-            awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}'
-          }
-          # main only ever carries plain X.Y.Z releases; dev builds get their
-          # prerelease suffix at package time, so a suffix here is a mistake.
-          require_release_version() {
-            if ! [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::$2 version $1 must be a plain X.Y.Z release version."
-              exit 1
-            fi
-          }
-
-          echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-
-          lib_bumped=0
-          for chart in charts/polytomic-base charts/polytomic; do
-            name=$(basename "$chart")
-            # Only charts with changes on this branch are checked.
-            if git diff --quiet "origin/$BASE"...HEAD -- "$chart"; then
-              echo "$name: unchanged"
-              continue
-            fi
-            file="$chart/Chart.yaml"
-            current=$(parse_version < "$file")
-            require_release_version "$current" "$name"
-            if git cat-file -e "origin/$BASE:$file" 2>/dev/null; then
-              base=$(git show "origin/$BASE:$file" | parse_version)
-              if [[ "$current" == "$base" ]]; then
-                echo "::error::$name version is unchanged ($current). Bump version: in $file."
-                exit 1
+          {
+            echo "<!-- ci-report -->"
+            echo "## CI report"
+            echo
+            echo "[Run]($SERVER/$REPO/actions/runs/$RUN_ID) · [Trivy alerts on this PR]($SERVER/$REPO/security/code-scanning?query=pr%3A$PR+tool%3ATrivy)"
+            echo
+            for part in kubeconform trivy; do
+              if [[ -s "build/report/$part.md" ]]; then
+                cat "build/report/$part.md"
+              else
+                echo "### $part"
+                echo
+                echo "Not produced: the job failed before it ran."
               fi
-              if [[ "$(printf '%s\n%s\n' "$base" "$current" | sort -V | tail -n1)" != "$current" ]]; then
-                echo "::error::$name version $current is not greater than $BASE ($base)."
-                exit 1
-              fi
-            fi
-            if ! grep -qF "## [$current]" "$chart/CHANGELOG.md"; then
-              echo "::error::$chart/CHANGELOG.md has no entry for $current."
-              exit 1
-            fi
-            if helm show chart "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/$name" --version "$current" >/dev/null 2>&1; then
-              echo "::error::$name $current is already published; pick a new version."
-              exit 1
-            fi
-            echo "$name: $current ok"
-            [[ "$name" == "polytomic-base" ]] && lib_bumped=1
-          done
-
-          if [[ "$lib_bumped" == 1 ]]; then
-            lib_version=$(parse_version < charts/polytomic-base/Chart.yaml)
-            pinned=$(awk '/name: polytomic-base/{f=1} f && /version:/{gsub(/["'\'']/, "", $2); print $2; exit}' charts/polytomic/Chart.yaml)
-            if [[ "$pinned" != "$lib_version" ]]; then
-              echo "::error::charts/polytomic pins polytomic-base $pinned but the lib is $lib_version."
-              exit 1
-            fi
-            locked=$(awk '/name: polytomic-base/{f=1} f && /version:/{print $2; exit}' charts/polytomic/Chart.lock)
-            if [[ "$locked" != "$lib_version" ]]; then
-              echo "::error::charts/polytomic/Chart.lock records polytomic-base $locked; run helm dependency update charts/polytomic."
-              exit 1
-            fi
+              echo
+            done
+          } > body.md
+          ids=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- ci-report -->")) | .id')
+          id=${ids%%$'\n'*}
+          if [[ -n "$id" ]]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F body=@body.md --silent
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@body.md --silent
           fi
+
+  release-check:
+    # A chart labelled release:<chart> must carry a releasable version and a
+    # changelog entry; merging the PR publishes it (release.yml). Unlabelled
+    # PRs have no version rules.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Check labelled charts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          for chart in polytomic-base polytomic; do
+            if jq -e --arg l "release:$chart" 'index($l) != null' <<<"$LABELS" >/dev/null; then
+              scripts/release-check.sh "$chart"
+            else
+              echo "$chart: no release:$chart label, skipped"
+            fi
+          done
 
   publish:
     # Every green push to main publishes both charts as prereleases,
     # <Chart.yaml version>-<short sha>, so a build can be pinned in a staging
-    # environment before it is tagged. Main always holds the next release
+    # environment before it is released. Main always holds the next release
     # version, so `helm install --version X.Y.Z` never selects a dev build.
+    # Releases themselves come from merged PRs labelled release:<chart>.
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
@@ -140,9 +208,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
 
@@ -150,7 +220,10 @@ jobs:
         run: make deps
 
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
 
       - name: Package and push
         run: |

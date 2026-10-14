@@ -1,0 +1,4 @@
+# KUBERNETES_SECRET holds the name of the Secret, not a secret value.
+AVD-KSV-0109
+# TASK_EXECUTOR_* / BULK_EXECUTOR_* are resource sizes that matched a sensitive-word list.
+AVD-KSV-01010
