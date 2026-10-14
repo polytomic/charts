@@ -6,7 +6,7 @@ HELM_SCHEMA_VERSION   ?= 2.4.0
 # renovate: datasource=github-releases depName=yannh/kubeconform extractVersion=^v(?<version>.*)$
 KUBECONFORM_VERSION   ?= 0.8.0
 # renovate: datasource=github-releases depName=aquasecurity/trivy extractVersion=^v(?<version>.*)$
-TRIVY_VERSION         ?= 0.75.0
+TRIVY_VERSION         ?= 0.76.0
 # renovate: datasource=github-releases depName=zizmorcore/zizmor extractVersion=^v(?<version>.*)$
 ZIZMOR_VERSION        ?= 1.30.1
 # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.*)$
