@@ -29,6 +29,7 @@ make lint
 make test
 make kubeconform    # render every ci/ fixture and validate against Kubernetes schemas
 make trivy-table    # Trivy misconfiguration report for charts/polytomic (report only)
+make trivy-report kubeconform-report   # the markdown summaries CI posts as a PR comment
 make workflow-lint  # zizmor and actionlint on .github/workflows
 make schema-check   # fail if values.schema.json is stale
 make template FIXTURE=bundled   # render charts/polytomic with one ci/ fixture

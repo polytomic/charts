@@ -45,7 +45,10 @@ FETCH = fetch() { tmp=$$(mktemp -d) \
 	&& bin=$$(find "$$tmp" -type f -name "$$2" | head -n 1) && [ -n "$$bin" ] \
 	&& mkdir -p $(BIN) && chmod +x "$$bin" && mv "$$bin" $(BIN)/"$$2" && rm -rf "$$tmp"; }
 
-.PHONY: tools check-tools deps lint template render kubeconform trivy trivy-table workflow-lint test schema schema-check clean clean-tools
+# Shared Trivy invocation; report only, never fails.
+TRIVY_SCAN = $(BIN)/trivy config --skip-version-check --exit-code 0 --helm-values $(CHART)/ci/$(TRIVY_FIXTURE)-values.yaml
+
+.PHONY: tools check-tools deps lint template render kubeconform kubeconform-report trivy trivy-table trivy-report workflow-lint test schema schema-check clean clean-tools
 
 ## Install the Helm plugins CI uses, at pinned versions. Fails on a version
 ## mismatch rather than running with whatever is installed.
@@ -92,7 +95,7 @@ template:
 ## Render every ci fixture of every renderable chart, per Kubernetes version,
 ## into build/render/<chart>/<fixture>/<version>.yaml. Run `make deps` first.
 render:
-	@rm -rf $(BUILD)/render
+	@rm -rf $(BUILD)/render $(BUILD)/kubeconform.log
 	@for c in $(RENDERABLE); do \
 		name=$$(basename "$$c"); n=0; \
 		for f in "$$c"/ci/*-values.yaml; do \
@@ -107,23 +110,37 @@ render:
 	done
 
 ## Validate every render against the Kubernetes API schemas for its version.
+## Checks every file before failing; output is kept in build/kubeconform.log
+## for `make kubeconform-report`.
 kubeconform: render
-	@for f in $$(find $(BUILD)/render -name '*.yaml' | sort); do \
-		echo "== $$f"; \
-		$(BIN)/kubeconform -strict -summary -kubernetes-version "$$(basename "$$f" .yaml)" \
-			-schema-location default -schema-location '$(CRD_SCHEMA)' "$$f" || exit 1; \
-	done
+	@log=$(BUILD)/kubeconform.log; : > "$$log"; failed=0; \
+	for f in $$(find $(BUILD)/render -name '*.yaml' | sort); do \
+		echo "== $$f" >> "$$log"; \
+		if $(BIN)/kubeconform -strict -summary -kubernetes-version "$$(basename "$$f" .yaml)" \
+			-schema-location default -schema-location '$(CRD_SCHEMA)' "$$f" >> "$$log" 2>&1; \
+		then :; else failed=1; fi; \
+	done; \
+	cat "$$log"; [ "$$failed" -eq 0 ]
+
+## Markdown summary of the last `make kubeconform`; CI posts it on PRs.
+kubeconform-report:
+	@mkdir -p $(BUILD)/report
+	scripts/report-kubeconform.sh $(BUILD)/kubeconform.log > $(BUILD)/report/kubeconform.md
 
 ## Trivy misconfiguration scan of the app chart. Report only: never fails.
 ## SARIF for CI; `make trivy-table` to read it locally.
 trivy:
 	@mkdir -p $(BUILD)
-	$(BIN)/trivy config --skip-version-check --exit-code 0 --format sarif --output $(BUILD)/trivy.sarif \
-		--helm-values $(CHART)/ci/$(TRIVY_FIXTURE)-values.yaml $(CHART)
+	$(TRIVY_SCAN) --format sarif --output $(BUILD)/trivy.sarif $(CHART)
 
 trivy-table:
-	$(BIN)/trivy config --skip-version-check --exit-code 0 \
-		--helm-values $(CHART)/ci/$(TRIVY_FIXTURE)-values.yaml $(CHART)
+	$(TRIVY_SCAN) $(CHART)
+
+## Markdown summary of the scan; CI posts it on PRs.
+trivy-report:
+	@mkdir -p $(BUILD)/report
+	$(TRIVY_SCAN) --format json --output $(BUILD)/trivy.json $(CHART)
+	scripts/report-trivy.sh $(BUILD)/trivy.json $(TRIVY_FIXTURE) > $(BUILD)/report/trivy.md
 
 ## Lint the GitHub workflows: zizmor (security) then actionlint (correctness).
 workflow-lint:
