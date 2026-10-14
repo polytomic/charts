@@ -52,21 +52,24 @@ make schema-check          # after editing values.yaml annotations
 make template FIXTURE=mcp  # eyeball a render; fixtures live in charts/polytomic/ci
 ```
 
-- Renovate PRs that bump a subchart also bump the chart `version:`; they still need a
-  `CHANGELOG.md` entry before merge. Tool pins in the `Makefile` carry `# renovate:` comments.
+- Renovate PRs are ordinary unlabelled PRs; the next release PR owns the version bump and
+  changelog entry. Tool pins in the `Makefile` carry `# renovate:` comments.
 
 - helm-unittest suites live in `charts/polytomic/tests` and
   `charts/polytomic-base/test-consumer/tests`. Add a test with every behaviour change.
   Assertions against subchart templates must list the sibling templates those include.
 - `values.schema.json` is generated: edit the `# @schema` annotations in `values.yaml` and run
   `make schema`. Cross-field rules live in `polytomic.validateConfig`.
-- Bumping a chart version needs a matching `## [x.y.z]` entry in that chart's
-  `CHANGELOG.md`. Bumping the lib also means updating the pin and `Chart.lock` in
-  `charts/polytomic` (`helm dependency update charts/polytomic`).
+- A release PR (labelled `release:<chart>`) needs a plain `x.y.z` `version:` newer than the
+  last release and a matching `## [x.y.z]` entry in that chart's `CHANGELOG.md`. Releasing the
+  lib also means updating the pin and `Chart.lock` in `charts/polytomic`
+  (`helm dependency update charts/polytomic`). `scripts/release-check.sh <chart>` checks this.
+  Unlabelled PRs have no version rules.
 - Pinned tool versions live at the top of the `Makefile`; CI uses the same targets.
 
 ## Releasing
 
-`main` holds the next release version. Merge a version-bump PR, optionally pin the resulting
-`<version>-<sha>` prerelease somewhere to try it, then push a tag named
-`polytomic-<version>` or `polytomic-base-<version>`.
+`main` holds the next release version. Every push to `main` publishes a `<version>-<sha>`
+prerelease to try. Merging a PR labelled `release:polytomic` or `release:polytomic-base`
+publishes that chart at its `Chart.yaml` version, signs it and tags `<chart>-<version>`. Nothing
+is tagged by hand.

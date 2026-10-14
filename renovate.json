@@ -4,13 +4,6 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
-  "packageRules": [
-    {
-      "description": "Subchart bumps must also bump the chart version; the CHANGELOG entry is added by hand before merge.",
-      "matchManagers": ["helmv3"],
-      "bumpVersion": "patch"
-    }
-  ],
   "customManagers": [
     {
       "customType": "regex",
