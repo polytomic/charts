@@ -42,12 +42,18 @@ label is added when that DaemonSet is on. Work on a `deepCopy`; never mutate `.V
 ## Working
 
 ```
-make tools                 # once
+make tools check-tools     # once
 make deps                  # and again after editing the lib
 make lint
 make test
+make kubeconform           # fixture renders validated against Kubernetes schemas
+make workflow-lint         # zizmor + actionlint, after editing .github/workflows
+make schema-check          # after editing values.yaml annotations
 make template FIXTURE=mcp  # eyeball a render; fixtures live in charts/polytomic/ci
 ```
+
+- Renovate PRs that bump a subchart also bump the chart `version:`; they still need a
+  `CHANGELOG.md` entry before merge. Tool pins in the `Makefile` carry `# renovate:` comments.
 
 - helm-unittest suites live in `charts/polytomic/tests` and
   `charts/polytomic-base/test-consumer/tests`. Add a test with every behaviour change.

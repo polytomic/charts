@@ -22,16 +22,24 @@ the 1.x on-premises chart, `charts/polytomic/UPGRADE-v2.0.md`.
 ## Working on the charts
 
 ```
-make tools      # install helm-unittest and helm-values-schema-json at pinned versions
-make deps       # vendor dependencies; re-run after editing the lib
+make tools          # install helm-unittest and helm-values-schema-json at pinned versions
+make check-tools    # install kubeconform, trivy, zizmor and actionlint into bin/
+make deps           # vendor dependencies; re-run after editing the lib
 make lint
 make test
+make kubeconform    # render every ci/ fixture and validate against Kubernetes schemas
+make trivy-table    # Trivy misconfiguration report for charts/polytomic (report only)
+make workflow-lint  # zizmor and actionlint on .github/workflows
+make schema-check   # fail if values.schema.json is stale
 make template FIXTURE=bundled   # render charts/polytomic with one ci/ fixture
-make schema     # regenerate charts/polytomic/values.schema.json
+make schema         # regenerate charts/polytomic/values.schema.json
 ```
 
 Dependency tarballs under `charts/*/charts/` are gitignored; `Chart.lock` is committed and
-`make deps` rebuilds them.
+`make deps` rebuilds them. `bin/` and `build/` are gitignored too.
+
+Renovate keeps the GitHub Actions digests, subchart versions and tool pins current. A subchart
+bump PR also bumps the chart's `version:`; add the matching `CHANGELOG.md` entry before merging.
 
 ## Releasing
 
@@ -50,3 +58,18 @@ the *next* release version.
    tag matches `Chart.yaml`, runs lint and tests, and pushes that version to GHCR.
 
 Prerelease builds older than 30 days are pruned weekly (`.github/workflows/prune.yml`).
+
+## Verifying a release
+
+Tagged releases are signed with cosign (keyless, Sigstore) and carry a GitHub build provenance
+attestation. Either check proves the chart was built by this repository's release workflow.
+
+```
+cosign verify ghcr.io/polytomic/charts/polytomic:2.0.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/polytomic/charts/.github/workflows/release.yml@refs/tags/'
+
+gh attestation verify oci://ghcr.io/polytomic/charts/polytomic:2.0.0 --owner polytomic
+```
+
+Prerelease builds from `main` are not signed.
