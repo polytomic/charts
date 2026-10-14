@@ -52,7 +52,7 @@ make schema-check          # after editing values.yaml annotations
 make template FIXTURE=mcp  # eyeball a render; fixtures live in charts/polytomic/ci
 ```
 
-- Renovate PRs are ordinary unlabelled PRs; the next release PR owns the version bump and
+- Renovate PRs do not bump chart versions; the next release PR bumps the version and adds the
   changelog entry. Tool pins in the `Makefile` carry `# renovate:` comments.
 
 - helm-unittest suites live in `charts/polytomic/tests` and

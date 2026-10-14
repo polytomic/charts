@@ -8,7 +8,6 @@ allow_published=0
 if [[ "${1:-}" == "--allow-published" ]]; then allow_published=1; shift; fi
 chart=${1:?usage: release-check.sh [--allow-published] <chart>}
 dir="charts/$chart"
-owner=${GITHUB_REPOSITORY_OWNER:-polytomic}
 
 fail() { echo "::error::$*"; exit 1; }
 parse_version() { awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$1"; }
@@ -16,16 +15,11 @@ parse_version() { awk -F'[: \t]+' '/^version:/ {gsub(/["'\'']/, "", $2); print $
 version=$(parse_version "$dir/Chart.yaml")
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$chart version $version must be a plain X.Y.Z release version."
 
-# Published releases: X.Y.Z tags on the GHCR package, oldest first. Package
-# endpoints differ for organisations and user accounts; 404 means no package yet.
+# Published releases: X.Y.Z tags on the GHCR package, oldest first.
 # RELEASE_CHECK_PUBLISHED overrides the list for testing.
 if [[ -z "${RELEASE_CHECK_PUBLISHED+x}" ]]; then
-  if [[ "$(gh api "/users/$owner" --jq .type)" == "Organization" ]]; then base="/orgs/$owner"; else base="/users/$owner"; fi
-  if ! raw=$(gh api --paginate "$base/packages/container/charts%2F$chart/versions" 2>&1); then
-    grep -q 'HTTP 404' <<<"$raw" || fail "could not list published versions of $chart: $raw"
-    raw='[]'
-  fi
-  published=$(jq -r '.[].metadata.container.tags[]? | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<<"$raw" | sort -V)
+  versions=$("$(dirname "$0")/ghcr.sh" versions "$chart")
+  published=$(awk '{print $2}' <<<"$versions" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true)
 else
   published=$RELEASE_CHECK_PUBLISHED
 fi

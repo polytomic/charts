@@ -39,23 +39,24 @@ make schema         # regenerate charts/polytomic/values.schema.json
 Dependency tarballs under `charts/*/charts/` are gitignored; `Chart.lock` is committed and
 `make deps` rebuilds them. `bin/` and `build/` are gitignored too.
 
-Renovate keeps the GitHub Actions digests, subchart versions and tool pins current. Its PRs are
-ordinary unlabelled PRs; the next release PR owns the version bump and changelog entry.
+Renovate keeps the GitHub Actions digests, subchart versions and tool pins current. Its PRs do
+not bump chart versions; the next release PR bumps the version and adds the changelog entry.
 
 ## Releasing
 
 Each chart has its own version in `Chart.yaml` and its own `CHANGELOG.md`. `main` always holds
-the *next* release version, for as long as it takes; a release is cut by merging a labelled PR.
+the *next* release version; a release is cut by merging a labelled PR.
 
 1. Open a PR with `version:` set in the chart's `Chart.yaml` and a `## [x.y.z]` entry in its
    `CHANGELOG.md`, and label it `release:polytomic` or `release:polytomic-base` (both, to
    release the lib and the app together). CI checks that the version is a plain `x.y.z`, newer
    than the latest published release, has a changelog entry, and (for the lib) that
    `charts/polytomic` pins the same lib version with an updated `Chart.lock`. PRs without a
-   release label are not held to any of this.
+   release label skip these checks.
 2. Merge. The push to `main` publishes each labelled chart to GHCR at its version, signs it,
    attaches a provenance attestation, and creates the tag `<chart>-<version>`. A run that
-   fails before tagging can be re-run from the Actions tab.
+   fails before tagging can be re-run from the Actions tab; it removes any untagged earlier
+   push of that version from GHCR before publishing again.
 
 Every push to `main` that passes lint and tests also publishes both charts as a prerelease,
 `<version>-<short sha>`, which you can pin to try a build before releasing:
@@ -67,7 +68,7 @@ than 30 days are pruned weekly (`.github/workflows/prune.yml`).
 
 ## Verifying a release
 
-Tagged releases are signed with cosign (keyless, Sigstore) and carry a GitHub build provenance
+Releases are signed with cosign (keyless, Sigstore) and carry a GitHub build provenance
 attestation. Either check proves the chart was built by this repository's release workflow.
 
 ```

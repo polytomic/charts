@@ -100,6 +100,15 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
 
+      # Only does anything when a previous run failed after helm push: the
+      # version is on GHCR without a tag. Removing it keeps the push below a
+      # fresh publish, never an overwrite.
+      - name: Remove an untagged earlier push of this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: scripts/ghcr.sh delete "$CHART" "$VERSION"
+
       - name: Package and push
         id: push
         run: |
