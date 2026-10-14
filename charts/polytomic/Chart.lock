@@ -7,9 +7,9 @@ dependencies:
   version: 18.2.3
 - name: redis
   repository: https://charts.bitnami.com/bitnami
-  version: 24.1.2
+  version: 24.1.8
 - name: nfs-server-provisioner
   repository: https://kubernetes-sigs.github.io/nfs-ganesha-server-and-external-provisioner/
   version: 1.6.0
-digest: sha256:998a7e73cb7ec65431c1ede8d9fff3761a109d17a73ba72c9513503d4d7d57c6
-generated: "2026-09-22T11:27:07.951254-07:00"
+digest: sha256:6a27b4bd6425b65113745b19bc4ca21d1bd26b5f05d1c1e314ebf916f20a53b8
+generated: "2026-10-14T23:34:58.064472624Z"
