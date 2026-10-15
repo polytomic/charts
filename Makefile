@@ -1,6 +1,6 @@
 # Tool pins. The `# renovate:` comments let Renovate bump them.
 # renovate: datasource=github-releases depName=helm-unittest/helm-unittest extractVersion=^v(?<version>.*)$
-HELM_UNITTEST_VERSION ?= 1.0.3
+HELM_UNITTEST_VERSION ?= 1.2.1
 # renovate: datasource=github-releases depName=losisin/helm-values-schema-json extractVersion=^v(?<version>.*)$
 HELM_SCHEMA_VERSION   ?= 2.4.0
 # renovate: datasource=github-releases depName=yannh/kubeconform extractVersion=^v(?<version>.*)$
