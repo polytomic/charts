@@ -34,7 +34,7 @@ jobs:
           for pkg in charts/polytomic-base charts/polytomic; do
             encoded=${pkg//\//%2F}
             gh api --paginate "$base/packages/container/$encoded/versions" \
-              --jq -c '.[] | {id, created_at, tags: .metadata.container.tags}' \
+              --jq '.[] | {id, created_at, tags: .metadata.container.tags}' \
             | while IFS= read -r v; do
                 id=$(jq -r '.id' <<<"$v")
                 created=$(date -u -d "$(jq -r '.created_at' <<<"$v")" +%s)

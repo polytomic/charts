@@ -112,6 +112,11 @@ in 1.x it was declared but never rendered, so clusters relied on their default c
 The app ServiceAccount is bound to a namespaced Role (pods, jobs) instead of a ClusterRole.
 The cluster-scoped ClusterRole and ClusterRoleBinding from 1.x are removed by the upgrade.
 
+**Argo CD:** an AppProject that restricts cluster-scoped resources must still permit
+`ClusterRole` and `ClusterRoleBinding` for the first 2.0 sync, or Argo cannot prune the 1.x
+objects and the sync fails. Both can be removed from the project's
+`clusterResourceWhitelist` once that sync has completed; 2.0 creates neither.
+
 ### NetworkPolicy
 
 `networkPolicy.postgresql`, `networkPolicy.redis`, `allowExternalHttps` and
