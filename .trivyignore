@@ -2,3 +2,5 @@
 AVD-KSV-0109
 # TASK_EXECUTOR_* / BULK_EXECUTOR_* are resource sizes that matched a sensitive-word list.
 AVD-KSV-01010
+# The runner creates and deletes a Job per task; the Role is scoped to the release namespace.
+AVD-KSV-0048

@@ -90,6 +90,9 @@ clusters without ReadWriteMany storage.
 `strategy`, `minReadySeconds`, `terminationGracePeriodSeconds`, `priorityClassName`,
 `topologySpreadConstraints`, `lifecycle`, `env`, `extraEnv`, `extraEnvFrom`,
 `sidecarContainers`, `image.{registry,name,tag}`, `podSecurityContext`, `securityContext`.
+A per-role `podSecurityContext` or `securityContext` replaces the global block entirely, so
+carry over `fsGroup`, `seccompProfile`, `capabilities.drop` and `allowPrivilegeEscalation`
+when overriding.
 
 ### Spawned Jobs
 

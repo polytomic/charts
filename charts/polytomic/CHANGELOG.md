@@ -43,3 +43,5 @@ Breaking for every 1.x values file; see `UPGRADE-v2.0.md`.
   lifecycle hooks, extra env and envFrom, per-service image overrides.
 - Google Secret Manager as an ESO source (`source.type: gcpsm`).
 - `values.schema.json` and helm-unittest suites.
+- Pods run with a `RuntimeDefault` seccomp profile and `allowPrivilegeEscalation: false` by
+  default (app, CronJobs and MCP).

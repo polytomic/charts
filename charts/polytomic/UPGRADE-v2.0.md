@@ -19,7 +19,7 @@ Roles are configured under `services.<role>` instead of top-level `web`, `sync`,
 | `web.resources` | `services.app.resources` |
 | `web.autoscaling` | `services.app.autoscaling` |
 | `web.nodeSelector` / `tolerations` / `affinity` / `podAnnotations` | same keys under `services.app`, or `services.defaults` for all roles |
-| `web.podSecurityContext` / `securityContext` | `podSecurityContext` / `securityContext` (global) or per role |
+| `web.podSecurityContext` / `securityContext` | `podSecurityContext` / `securityContext` (global) or per role; defaults now add `RuntimeDefault` seccomp and `allowPrivilegeEscalation: false` |
 | `web.sidecarContainers` | `services.app.sidecarContainers` |
 | `podDisruptionBudget` (global) | `services.<role>.podDisruptionBudget` |
 | `service.port` | `services.app.service.port` (now `5100`, was `80`) |
