@@ -104,8 +104,9 @@ when overriding.
 
 Set `mcp.enabled: true`. `mcp.polytomic.baseUrl` defaults to the in-cluster app Service and
 `mcp.polytomic.authServerUrl` to `auth.url`; set `mcp.polytomic.publicOrigin` to the public
-MCP URL. MCP has its own `mcp.config`, `mcp.secrets`, `mcp.ingress`, `mcp.networkPolicy`
-and `mcp.services.http`. It never receives the app's config or secrets.
+MCP URL. `POLYTOMIC_MCP_REDIS_URL` is computed from the same `redis.*` / `externalRedis.*`
+settings as the app's `REDIS_URL`. MCP has its own `mcp.config`, `mcp.secrets`, `mcp.ingress`,
+`mcp.networkPolicy` and `mcp.services.http`. It never receives the app's config or secrets.
 
 ### Logging and APM
 

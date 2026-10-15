@@ -627,16 +627,15 @@ mcp:
     seccompProfile:
       type: RuntimeDefault
 
-  # The QuickJS sandbox launcher spawns processes and writes temp files, so
-  # the root filesystem stays writable.
+  # The QuickJS sandbox talks to its child over pipes and never writes to disk.
   securityContext:
     capabilities:
       drop:
         - ALL
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false
-    runAsNonRoot: false
-    runAsUser: 0
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
 
   healthProbes:
     readinessProbe:
