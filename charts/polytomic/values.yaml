@@ -488,11 +488,16 @@ serviceAccount:
 
 podSecurityContext:
   fsGroup: 2000
+  seccompProfile:
+    type: RuntimeDefault
 
+# A per-role securityContext / podSecurityContext replaces these blocks
+# whole; a global override merges into them.
 securityContext:
   capabilities:
     drop:
       - ALL
+  allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false
   runAsNonRoot: false
   runAsUser: 0
@@ -619,12 +624,15 @@ mcp:
 
   podSecurityContext:
     fsGroup: 2000
+    seccompProfile:
+      type: RuntimeDefault
 
   # The QuickJS sandbox talks to its child over pipes and never writes to disk.
   securityContext:
     capabilities:
       drop:
         - ALL
+    allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 1000
