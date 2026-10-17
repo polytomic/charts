@@ -8,7 +8,7 @@ KUBECONFORM_VERSION   ?= 0.8.0
 # renovate: datasource=github-releases depName=aquasecurity/trivy extractVersion=^v(?<version>.*)$
 TRIVY_VERSION         ?= 0.75.0
 # renovate: datasource=github-releases depName=zizmorcore/zizmor extractVersion=^v(?<version>.*)$
-ZIZMOR_VERSION        ?= 1.30.1
+ZIZMOR_VERSION        ?= 1.31.1
 # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.*)$
 ACTIONLINT_VERSION    ?= 1.7.12
 
