@@ -2,7 +2,7 @@
 # renovate: datasource=github-releases depName=helm-unittest/helm-unittest extractVersion=^v(?<version>.*)$
 HELM_UNITTEST_VERSION ?= 1.0.3
 # renovate: datasource=github-releases depName=losisin/helm-values-schema-json extractVersion=^v(?<version>.*)$
-HELM_SCHEMA_VERSION   ?= 2.4.0
+HELM_SCHEMA_VERSION   ?= 2.6.0
 # renovate: datasource=github-releases depName=yannh/kubeconform extractVersion=^v(?<version>.*)$
 KUBECONFORM_VERSION   ?= 0.8.0
 # renovate: datasource=github-releases depName=aquasecurity/trivy extractVersion=^v(?<version>.*)$
